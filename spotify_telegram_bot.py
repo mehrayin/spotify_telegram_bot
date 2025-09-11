@@ -9,11 +9,11 @@ import datetime
 import os
 import time
 # ====== تنظیمات از Environment Variables ======
-SPOTIFY_CLIENT_ID = os.environ.get("65a3a4be8c62468288e96f5487a714ae")
-SPOTIFY_CLIENT_SECRET = os.environ.get("7e2e257b9dbc445a88f11df0c8e24e5b")
-TELEGRAM_BOT_TOKEN = os.environ.get("8328038273:AAHU0oKRusc49Xd6TDJQWL-6KSlUj4N9Swk")
-TELEGRAM_CHAT_ID = os.environ.get("5881575331")
-REFRESH_TOKEN = os.environ.get("AQCZ_-fJv3zFftF2b4byDJQwLlK6ocAmdJ-XvHjAYjUFdrDYWv8BRMZ0o-0dK7fko08zQI63QFmxqa_B05qifvzVp9lP1LipeoqwZ24elpzyfiuroNmrsopiquP6KAE-d-I")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
 # ====== Debug: چک کردن TELEGRAM_BOT_TOKEN ======
@@ -156,3 +156,4 @@ if __name__ == "__main__":
     start_bot_thread()        # Thread چک ریلیزها
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
