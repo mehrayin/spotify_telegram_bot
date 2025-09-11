@@ -23,8 +23,8 @@ app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 # ====== تنظیمات Rate Limit ======
-MAX_WORKERS = 2       # کاهش تعداد Worker برای جلوگیری از 429
-REQUEST_DELAY = 1     # افزایش فاصله بین هر درخواست (ثانیه)
+MAX_WORKERS = 1       # کاهش Worker برای جلوگیری از 429 شدید
+REQUEST_DELAY = 2     # افزایش فاصله بین هر درخواست
 album_queue = Queue() # صف ارسال آلبوم‌ها
 
 # ====== Worker Queue ======
@@ -57,7 +57,7 @@ def refresh_access_token(refresh_token):
         print("Spotify token request failed:", e)
         return None
 
-# ====== تابع GET امن با retry و مدیریت 429 ======
+# ====== GET امن با مدیریت 429 و سقف Retry-After ======
 def safe_get(url, headers, retries=5, delay=5):
     for attempt in range(retries):
         try:
@@ -66,6 +66,7 @@ def safe_get(url, headers, retries=5, delay=5):
                 return response.json()
             elif response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", delay))
+                retry_after = min(retry_after, 10)  # سقف 10 ثانیه
                 print(f"Rate limit hit. Sleeping {retry_after} seconds...")
                 time.sleep(retry_after)
             else:
@@ -106,7 +107,7 @@ def get_all_albums(token, artist_id):
     return albums
 
 # ====== گرفتن ریلیزهای اخیر ======
-def get_recent_albums(token, artist_id, months=6):
+def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
     all_albums = get_all_albums(token, artist_id)
     cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
     recent = []
@@ -118,6 +119,8 @@ def get_recent_albums(token, artist_id, months=6):
         if date_obj > cutoff:
             a['parsed_date'] = date_obj
             recent.append(a)
+        if len(recent) >= max_per_artist:
+            break
     return recent
 
 # ====== ارسال آلبوم‌ها با Queue ======
