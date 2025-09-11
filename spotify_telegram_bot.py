@@ -97,10 +97,10 @@ def get_recent_albums(token, artist_id, months=6):
 def enqueue_album(album, artist_name):
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-# ====== ارسال آلبوم به تلگرام با HTML Mode امن ======
+# ====== ارسال آلبوم به تلگرام با HTML Mode ======
 def send_album_to_telegram(album, artist_name):
-    text = f"🎵 <b>{artist_name}</b> - {album['name']}\n" \
-           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}\n" \
+    text = f"🎵 <b>{artist_name}</b> - {album['name']}<br>" \
+           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
            f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
 
     photo_url = album['images'][0]['url'] if album.get('images') else None
@@ -122,7 +122,12 @@ def process_albums(months, query):
             query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
             return
 
-        query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+        # پیام وضعیت
+        try:
+            query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+        except telegram.error.BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise e
 
         for artist in artists:
             albums = get_recent_albums(token, artist['id'], months=months)
@@ -132,7 +137,10 @@ def process_albums(months, query):
         album_queue.join()  # منتظر می‌ماند تا همه آلبوم‌ها ارسال شوند
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
     except Exception as e:
-        query.edit_message_text(f"❌ خطا: {e}")
+        try:
+            query.edit_message_text(f"❌ خطا: {e}")
+        except telegram.error.BadRequest:
+            pass
 
 # ====== هندلر دکمه‌ها ======
 def handle_button_click(update):
@@ -148,14 +156,21 @@ def handle_button_click(update):
             [InlineKeyboardButton("❌ لغو", callback_data="cancel")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        query.edit_message_text("✅ عملیات لغو شد.", reply_markup=reply_markup)
+        try:
+            query.edit_message_text("✅ عملیات لغو شد.", reply_markup=reply_markup)
+        except telegram.error.BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise e
         return
 
     try:
         months = int(data)
         threading.Thread(target=process_albums, args=(months, query), daemon=True).start()
     except Exception as e:
-        query.edit_message_text(f"❌ خطا: {e}")
+        try:
+            query.edit_message_text(f"❌ خطا: {e}")
+        except telegram.error.BadRequest:
+            pass
 
 # ====== وبهوک تلگرام ======
 @app.route("/webhook", methods=["POST"])
