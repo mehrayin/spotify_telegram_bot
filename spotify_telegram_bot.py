@@ -133,7 +133,8 @@ bot.add_handler(CommandHandler("help", help_msg))
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(force=True)
-    update = Update.de_json(data, bot.application.bot)
+    from telegram import Bot
+    update = Update.de_json(data, Bot(token=TELEGRAM_BOT_TOKEN))
     bot.application.update_queue.put_nowait(update)
     return "OK"
 
@@ -153,3 +154,4 @@ if __name__ == "__main__":
     print("Webhook set:", url)
     # اجرای bot
     asyncio.run(bot.run_webhook(listen="0.0.0.0", port=int(os.environ.get("PORT", 8080)), url_path="webhook", webhook_url=f"https://{RAILWAY_URL}/webhook"))
+
