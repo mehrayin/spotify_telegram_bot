@@ -8,8 +8,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import datetime
 import os
 import threading
+import time
+from queue import Queue
 
-# ====== تنظیمات از Environment Variables ======
+# ====== تنظیمات ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -20,7 +22,27 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value
 app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ====== تابع گرفتن Access Token ======
+# ====== تنظیمات Rate Limit ======
+MAX_WORKERS = 5       # تعداد Worker همزمان
+REQUEST_DELAY = 0.2   # تأخیر بین هر درخواست (ثانیه)
+album_queue = Queue() # صف ارسال آلبوم‌ها
+
+# ====== Worker Queue ======
+def worker():
+    while True:
+        func, args = album_queue.get()
+        try:
+            func(*args)
+        except Exception as e:
+            print("Worker error:", e)
+        album_queue.task_done()
+        time.sleep(REQUEST_DELAY)
+
+for _ in range(MAX_WORKERS):
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
+# ====== Access Token ======
 def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
@@ -28,7 +50,7 @@ def refresh_access_token(refresh_token):
     res_json = response.json()
     return res_json.get("access_token")
 
-# ====== گرفتن همه هنرمندان دنبال‌شده با paging ======
+# ====== گرفتن همه هنرمندان با paging ======
 def get_all_followed_artists(token):
     artists = []
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
@@ -39,10 +61,10 @@ def get_all_followed_artists(token):
         data = response.json()
         items = data.get("artists", {}).get("items", [])
         artists.extend(items)
-        url = data.get("artists", {}).get("next")  # آدرس صفحه بعد
+        url = data.get("artists", {}).get("next")
     return artists
 
-# ====== گرفتن همه آلبوم‌های هنرمند با paging ======
+# ====== گرفتن همه آلبوم‌ها با paging ======
 def get_all_albums(token, artist_id):
     albums = []
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums?include_groups=album,single&limit=50"
@@ -53,10 +75,10 @@ def get_all_albums(token, artist_id):
         data = response.json()
         items = data.get("items", [])
         albums.extend(items)
-        url = data.get("next")  # صفحه بعد
+        url = data.get("next")
     return albums
 
-# ====== گرفتن ریلیزهای اخیر بر اساس ماه ======
+# ====== گرفتن ریلیزهای اخیر ======
 def get_recent_albums(token, artist_id, months=6):
     all_albums = get_all_albums(token, artist_id)
     cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
@@ -71,28 +93,11 @@ def get_recent_albums(token, artist_id, months=6):
             recent.append(a)
     return recent
 
-# ====== ارسال آلبوم‌ها در Thread جداگانه ======
-def process_albums(months, query):
-    try:
-        token = refresh_access_token(REFRESH_TOKEN)
-        artists = get_all_followed_artists(token)
+# ====== ارسال آلبوم‌ها با Queue ======
+def enqueue_album(album, artist_name):
+    album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-        if not artists:
-            query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
-            return
-
-        query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
-
-        for artist in artists:
-            albums = get_recent_albums(token, artist['id'], months=months)
-            for album in albums:
-                send_album_to_telegram(album, artist['name'])
-
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
-    except Exception as e:
-        query.edit_message_text(f"❌ خطا: {e}")
-
-# ====== ارسال پیام به تلگرام با MarkdownV2 امن ======
+# ====== ارسال آلبوم به تلگرام با MarkdownV2 امن ======
 def send_album_to_telegram(album, artist_name):
     def escape_md(text):
         escape_chars = r'\_*[]()~`>#+-=|{}.!'
@@ -113,6 +118,28 @@ def send_album_to_telegram(album, artist_name):
     except Exception as e:
         print("Failed to send album:", e)
 
+# ====== پردازش ریلیزها در Thread ======
+def process_albums(months, query):
+    try:
+        token = refresh_access_token(REFRESH_TOKEN)
+        artists = get_all_followed_artists(token)
+
+        if not artists:
+            query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            return
+
+        query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+
+        for artist in artists:
+            albums = get_recent_albums(token, artist['id'], months=months)
+            for album in albums:
+                enqueue_album(album, artist['name'])
+
+        album_queue.join()  # منتظر می‌ماند تا همه آلبوم‌ها ارسال شوند
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
+    except Exception as e:
+        query.edit_message_text(f"❌ خطا: {e}")
+
 # ====== هندلر دکمه‌ها ======
 def handle_button_click(update):
     query = update.callback_query
@@ -132,7 +159,7 @@ def handle_button_click(update):
 
     try:
         months = int(data)
-        threading.Thread(target=process_albums, args=(months, query)).start()
+        threading.Thread(target=process_albums, args=(months, query), daemon=True).start()
     except Exception as e:
         query.edit_message_text(f"❌ خطا: {e}")
 
