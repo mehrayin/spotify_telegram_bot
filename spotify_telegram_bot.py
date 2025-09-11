@@ -1,13 +1,12 @@
 # نصب کتابخانه‌ها:
-# pip install flask requests python-telegram-bot
+# pip install flask requests python-telegram-bot apscheduler
 
 from flask import Flask, request
 import requests
 import telegram
-import threading
 import datetime
 import os
-import time
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -16,49 +15,29 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
+PORT = int(os.environ.get("PORT", 5000))
+
+# ====== ساخت اپ Flask ======
+app = Flask(__name__)
 
 # ====== بررسی تنظیمات محیطی ======
 for var_name in ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "REFRESH_TOKEN"]:
     if not os.environ.get(var_name):
         print(f"ERROR: Environment variable {var_name} is NOT set!")
 
-# ====== ساخت اپ Flask ======
-app = Flask(__name__)
-
-# ====== مسیر اصلی ======
-@app.route("/")
-def index():
-    return "Spotify Telegram Bot is running!"
-
-# ====== مسیر Callback اسپاتیفای ======
-@app.route("/callback")
-def callback():
-    code = request.args.get("code")
-    if code:
-        return f"Spotify Authorization Code: {code}"
-    else:
-        return "Spotify Authorization - No code found."
-
-# ====== دریافت Access Token با Refresh Token ======
+# ====== توابع کمکی ======
 def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token
-    }
+    data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
     response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
-    res_json = response.json()
-    return res_json.get("access_token")
+    return response.json().get("access_token")
 
-# ====== گرفتن هنرمندان دنبال‌شده ======
 def get_followed_artists(token):
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(url, headers=headers)
-    artists = response.json().get("artists", {}).get("items", [])
-    return artists
+    return response.json().get("artists", {}).get("items", [])
 
-# ====== گرفتن ریلیزهای جدید ======
 def get_recent_albums(token, artist_id, months=6):
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
@@ -70,53 +49,47 @@ def get_recent_albums(token, artist_id, months=6):
     for a in albums:
         try:
             date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+            if date_obj > cutoff:
+                recent.append(a)
         except:
             continue
-        if date_obj > cutoff:
-            recent.append(a)
     return recent
 
-# ====== ارسال پیام به تلگرام ======
 def send_telegram(message):
-    try:
-        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-    except Exception as e:
-        print("Failed to send Telegram message:", e)
-
-# ====== ارسال پیام تست ======
-def send_test_message():
-    try:
-        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Test message: Bot is running!")
-        print("Test message sent successfully!")
-    except Exception as e:
-        print("Failed to send test message:", e)
-
-# ====== چک و ارسال ریلیزها در Thread دائمی ======
-def send_releases():
-    while True:
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
-            access_token = refresh_access_token(REFRESH_TOKEN)
-            artists = get_followed_artists(access_token)
-            for artist in artists:
-                name = artist['name']
-                artist_id = artist['id']
-                albums = get_recent_albums(access_token, artist_id)
-                for album in albums:
-                    msg = f"🎵 New release by {name}: {album['name']}\n{album['external_urls']['spotify']}"
-                    send_telegram(msg)
-            time.sleep(300)  # 300s صبر کن
+            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
         except Exception as e:
-            print("Error in send_releases:", e)
-            time.sleep(60)
+            print("Failed to send Telegram message:", e)
 
-def start_bot_thread():
-    thread = threading.Thread(target=send_releases)
-    thread.daemon = True
-    thread.start()
+def send_releases_job():
+    try:
+        access_token = refresh_access_token(REFRESH_TOKEN)
+        if not access_token:
+            print("Access token not available")
+            return
+        artists = get_followed_artists(access_token)
+        for artist in artists:
+            name = artist['name']
+            artist_id = artist['id']
+            albums = get_recent_albums(access_token, artist_id)
+            for album in albums:
+                msg = f"🎵 New release by {name}: {album['name']}\n{album['external_urls']['spotify']}"
+                send_telegram(msg)
+    except Exception as e:
+        print("Error in send_releases_job:", e)
 
-# ====== ساخت شی Bot برای Webhook تلگرام ======
+# ====== Flask routes ======
+@app.route("/")
+def index():
+    return "Spotify Telegram Bot is running!"
+
+@app.route("/callback")
+def callback():
+    code = request.args.get("code")
+    return f"Spotify Authorization Code: {code}" if code else "Spotify Authorization - No code found."
+
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 @app.route("/webhook", methods=["POST"])
@@ -126,25 +99,26 @@ def telegram_webhook():
         return ("Forbidden", 403)
 
     data = request.get_json(force=True)
-    print("Incoming update:", data)
-
     try:
         update = telegram.Update.de_json(data, bot)
+        if update.message and update.message.text:
+            chat_id = update.message.chat.id
+            text = update.message.text
+            bot.send_message(chat_id=chat_id, text=f"پیام دریافت شد. متن: {text}")
     except Exception as e:
-        print("Failed to parse update:", e)
+        print("Failed to parse/update message:", e)
         return ("Bad Request", 400)
-
-    if update.message and update.message.text:
-        chat_id = update.message.chat.id
-        text = update.message.text
-        bot.send_message(chat_id=chat_id, text=f"پیام دریافت شد. متن: {text}")
 
     return ("OK", 200)
 
+# ====== APScheduler setup ======
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=send_releases_job, trigger="interval", minutes=5)
+scheduler.start()
+
+# ====== پیام تستی ======
+send_telegram("✅ Bot started successfully!")
+
 # ====== اجرای برنامه ======
 if __name__ == "__main__":
-    send_test_message()
-    start_bot_thread()
-    PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
-
