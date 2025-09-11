@@ -112,7 +112,7 @@ def send_releases():
                 for album in albums:
                     msg = f"🎵 New release by {name}: {album['name']}\n{album['external_urls']['spotify']}"
                     send_telegram(msg)
-            time.sleep(3600)  # یک ساعت صبر کن
+            time.sleep(300)  # یک ساعت صبر کن
         except Exception as e:
             print("Error:", e)
             time.sleep(60)
@@ -156,3 +156,4 @@ if __name__ == "__main__":
     start_bot_thread()        # Thread چک ریلیزها
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
