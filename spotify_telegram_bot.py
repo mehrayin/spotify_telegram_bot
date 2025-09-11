@@ -10,6 +10,7 @@ import os
 import threading
 import time
 from queue import Queue
+import html
 
 # ====== تنظیمات ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -24,7 +25,7 @@ bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 # ====== تنظیمات Rate Limit ======
 MAX_WORKERS = 1       # کاهش Worker برای جلوگیری از 429 شدید
-REQUEST_DELAY = 2     # افزایش فاصله بین هر درخواست
+REQUEST_DELAY = 2     # فاصله بین هر درخواست
 album_queue = Queue() # صف ارسال آلبوم‌ها
 
 # ====== Worker Queue ======
@@ -57,7 +58,7 @@ def refresh_access_token(refresh_token):
         print("Spotify token request failed:", e)
         return None
 
-# ====== GET امن با مدیریت 429 و سقف Retry-After ======
+# ====== GET امن با مدیریت 429 ======
 def safe_get(url, headers, retries=5, delay=5):
     for attempt in range(retries):
         try:
@@ -125,11 +126,12 @@ def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
 
 # ====== ارسال آلبوم‌ها با Queue ======
 def enqueue_album(album, artist_name):
+    print(f"Queueing: {artist_name} - {album['name']}")  # Debug ساده
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-# ====== ارسال آلبوم به تلگرام با HTML Mode ======
+# ====== ارسال آلبوم به تلگرام ======
 def send_album_to_telegram(album, artist_name):
-    text = f"🎵 <b>{artist_name}</b> - {album['name']}<br>" \
+    text = f"🎵 <b>{html.escape(artist_name)}</b> - {html.escape(album['name'])}<br>" \
            f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
            f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
 
