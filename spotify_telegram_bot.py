@@ -1,175 +1,148 @@
-import os
-import json
-import datetime
-import requests
+# نصب کتابخانه‌ها:
+# pip install flask requests python-telegram-bot
+
 from flask import Flask, request
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+import requests
+import telegram
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import datetime
+import os
 
-# ====== تنظیمات ======
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-REFRESH_TOKEN = os.getenv("REFRESH_TOKEN")
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-RAILWAY_URL = os.getenv("RAILWAY_URL")
+# ====== تنظیمات از Environment Variables ======
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
-# ====== Flask ======
 app = Flask(__name__)
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ====== کیبورد ======
-keyboard = [
-    [KeyboardButton("یک ماه گذشته"), KeyboardButton("۳ ماه گذشته")],
-    [KeyboardButton("۶ ماه گذشته"), KeyboardButton("۱۲ ماه گذشته")],
-    [KeyboardButton("لغو")]
-]
-reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-# ====== فایل ذخیره پیام‌های فرستاده شده ======
-SENT_FILE = "sent_albums.json"
-if os.path.exists(SENT_FILE):
-    with open(SENT_FILE, "r", encoding="utf-8") as f:
-        sent_albums = set(json.load(f))
-else:
-    sent_albums = set()
-
-def save_sent_albums():
-    with open(SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(sent_albums), f, ensure_ascii=False, indent=2)
-
-# ====== دستورات اسپاتیفای ======
-def get_access_token():
+# ====== دریافت Access Token با Refresh Token ======
+def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
     data = {
         "grant_type": "refresh_token",
-        "refresh_token": REFRESH_TOKEN,
-        "client_id": SPOTIFY_CLIENT_ID,
-        "client_secret": SPOTIFY_CLIENT_SECRET,
+        "refresh_token": refresh_token
     }
-    r = requests.post(url, data=data)
-    return r.json().get("access_token")
+    response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
+    res_json = response.json()
+    return res_json.get("access_token")
 
+# ====== گرفتن هنرمندان دنبال‌شده ======
 def get_followed_artists(token):
-    artists = []
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
     headers = {"Authorization": f"Bearer {token}"}
-    while url:
-        r = requests.get(url, headers=headers).json()
-        items = r.get("artists", {}).get("items", [])
-        artists.extend(items)
-        after = r.get("artists", {}).get("cursors", {}).get("after")
-        url = f"https://api.spotify.com/v1/me/following?type=artist&limit=50&after={after}" if after else None
-    return artists
+    response = requests.get(url, headers=headers)
+    return response.json().get("artists", {}).get("items", [])
 
-def get_albums_for_artist(token, artist_id, months_delta=None):
-    albums = []
-    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums?include_groups=album,single&limit=50"
+# ====== گرفتن ریلیزهای جدید ======
+def get_recent_albums(token, artist_id, months=6):
+    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
-    while url:
-        r = requests.get(url, headers=headers).json()
-        items = r.get("items", [])
-        for a in items:
-            if months_delta:
-                try:
-                    release_date = a.get("release_date", "1900-01-01")
-                    release_dt = datetime.datetime.fromisoformat(release_date)
-                    cutoff = datetime.datetime.now() - months_delta
-                    if release_dt < cutoff:
-                        continue
-                except:
-                    continue
-            albums.append(a)
-        url = r.get("next")
-    return albums
+    params = {"include_groups": "album,single", "limit": 50}
+    response = requests.get(url, headers=headers, params=params)
+    albums = response.json().get("items", [])
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
+    recent = []
+    for a in albums:
+        try:
+            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+        except:
+            continue
+        if date_obj > cutoff:
+            a['parsed_date'] = date_obj
+            recent.append(a)
+    return recent
 
-# ====== تلگرام ======
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 ربات آماده به کار است!\nیکی از گزینه‌های زیر را انتخاب کنید:",
-        reply_markup=reply_markup
-    )
+# ====== ارسال پیام به تلگرام ======
+def send_album_to_telegram(album, artist_name):
+    text = f"🎵 *{artist_name}* - {album['name']}\n" \
+           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}\n" \
+           f"[لینک اسپاتیفای]({album['external_urls']['spotify']})"
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=reply_markup)
+    photo_url = album['images'][0]['url'] if album.get('images') else None
+    try:
+        if photo_url:
+            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
+    except Exception as e:
+        print("Failed to send album:", e)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    delta = None
+# ====== هندلر برای دکمه‌ها ======
+def handle_button_click(update):
+    query = update.callback_query
+    data = query.data
 
-    if text == "یک ماه گذشته":
-        delta = datetime.timedelta(days=30)
-    elif text == "۳ ماه گذشته":
-        delta = datetime.timedelta(days=90)
-    elif text == "۶ ماه گذشته":
-        delta = datetime.timedelta(days=180)
-    elif text == "۱۲ ماه گذشته":
-        delta = datetime.timedelta(days=365)
-    elif text == "لغو":
-        await cancel(update, context)
+    if data == "cancel":
+        keyboard = [
+            [InlineKeyboardButton("یک ماه گذشته", callback_data="1")],
+            [InlineKeyboardButton("۳ ماه گذشته", callback_data="3")],
+            [InlineKeyboardButton("۶ ماه گذشته", callback_data="6")],
+            [InlineKeyboardButton("۱۲ ماه گذشته", callback_data="12")],
+            [InlineKeyboardButton("❌ لغو", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        query.edit_message_text(
+            "✅ عملیات لغو شد.\nدوباره یکی از بازه‌های زمانی رو انتخاب کن:",
+            reply_markup=reply_markup
+        )
         return
 
-    if delta:
-        token = get_access_token()
+    try:
+        months = int(data)
+        token = refresh_access_token(REFRESH_TOKEN)
         artists = get_followed_artists(token)
+
+        if not artists:
+            query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            return
+
+        query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+
         for artist in artists:
-            artist_name = artist["name"]
-            artist_id = artist["id"]
-            albums = get_albums_for_artist(token, artist_id, months_delta=delta)
+            albums = get_recent_albums(token, artist['id'], months=months)
             for album in albums:
-                album_id = album["id"]
-                if album_id in sent_albums:
-                    continue
-                sent_albums.add(album_id)
-                save_sent_albums()  # ذخیره تغییرات
+                send_album_to_telegram(album, artist['name'])
 
-                name = album["name"]
-                release_date = album.get("release_date", "نامشخص")
-                url = album["external_urls"]["spotify"]
-                image = album["images"][0]["url"] if album["images"] else None
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
+    except Exception as e:
+        query.edit_message_text(f"❌ خطا: {e}")
 
-                caption = f"🎵 {name}\n👤 {artist_name}\n📅 {release_date}"
-                if image:
-                    await update.message.reply_photo(
-                        photo=image,
-                        caption=caption,
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("باز کردن در Spotify", url=url)]
-                        ])
-                    )
-                else:
-                    await update.message.reply_text(f"{caption}\n🔗 {url}")
-
-# ====== Flask webhook ======
+# ====== وبهوک تلگرام ======
 @app.route("/webhook", methods=["POST"])
-def webhook():
+def telegram_webhook():
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
+        return ("Forbidden", 403)
+
     data = request.get_json(force=True)
-    update = Update.de_json(data, application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK"
+    update = telegram.Update.de_json(data, bot)
 
-# ====== اجرای ربات ======
+    if update.message and update.message.text == "/start":
+        keyboard = [
+            [InlineKeyboardButton("یک ماه گذشته", callback_data="1")],
+            [InlineKeyboardButton("۳ ماه گذشته", callback_data="3")],
+            [InlineKeyboardButton("۶ ماه گذشته", callback_data="6")],
+            [InlineKeyboardButton("۱۲ ماه گذشته", callback_data="12")],
+            [InlineKeyboardButton("❌ لغو", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        bot.send_message(
+            chat_id=update.message.chat.id,
+            text="🤖 ربات آماده به کار است.\nیکی از بازه‌های زمانی را انتخاب کنید:",
+            reply_markup=reply_markup
+        )
+
+    elif update.callback_query:
+        handle_button_click(update)
+
+    return ("OK", 200)
+
+# ====== اجرای برنامه ======
 if __name__ == "__main__":
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path="webhook",
-        webhook_url=f"https://{RAILWAY_URL}/webhook"
-    )
-
+    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
+    PORT = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=PORT)
