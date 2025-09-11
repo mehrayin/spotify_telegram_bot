@@ -46,9 +46,30 @@ for _ in range(MAX_WORKERS):
 def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
-    response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
-    res_json = response.json()
-    return res_json.get("access_token")
+    try:
+        response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
+        if response.status_code != 200:
+            print(f"Spotify token error {response.status_code}: {response.text}")
+            return None
+        res_json = response.json()
+        return res_json.get("access_token")
+    except Exception as e:
+        print("Spotify token request failed:", e)
+        return None
+
+# ====== تابع کمکی برای GET امن با retry ======
+def safe_get(url, headers, retries=3, delay=2):
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Spotify GET error {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"Spotify GET exception: {e}")
+        time.sleep(delay)
+    return None
 
 # ====== گرفتن همه هنرمندان با paging ======
 def get_all_followed_artists(token):
@@ -57,8 +78,9 @@ def get_all_followed_artists(token):
     headers = {"Authorization": f"Bearer {token}"}
 
     while url:
-        response = requests.get(url, headers=headers)
-        data = response.json()
+        data = safe_get(url, headers)
+        if not data:
+            break
         items = data.get("artists", {}).get("items", [])
         artists.extend(items)
         url = data.get("artists", {}).get("next")
@@ -71,8 +93,9 @@ def get_all_albums(token, artist_id):
     headers = {"Authorization": f"Bearer {token}"}
 
     while url:
-        response = requests.get(url, headers=headers)
-        data = response.json()
+        data = safe_get(url, headers)
+        if not data:
+            break
         items = data.get("items", [])
         albums.extend(items)
         url = data.get("next")
@@ -116,18 +139,26 @@ def send_album_to_telegram(album, artist_name):
 def process_albums(months, query):
     try:
         token = refresh_access_token(REFRESH_TOKEN)
-        artists = get_all_followed_artists(token)
+        if not token:
+            try:
+                query.edit_message_text("❌ خطا: دریافت Access Token ناموفق بود.")
+            except telegram.error.BadRequest:
+                pass
+            return
 
+        artists = get_all_followed_artists(token)
         if not artists:
-            query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            try:
+                query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            except telegram.error.BadRequest:
+                pass
             return
 
         # پیام وضعیت
         try:
             query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
-        except telegram.error.BadRequest as e:
-            if "Message is not modified" not in str(e):
-                raise e
+        except telegram.error.BadRequest:
+            pass
 
         for artist in artists:
             albums = get_recent_albums(token, artist['id'], months=months)
