@@ -7,6 +7,7 @@ import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import datetime
 import os
+import time
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -71,34 +72,39 @@ def get_followed_artists(token):
 
     return data.get("artists", {}).get("items", [])
 
-# ====== گرفتن ریلیزهای جدید ======
-def get_recent_albums(token, artist_id, months=6):
+# ====== گرفتن ریلیزهای جدید با کنترل Rate Limit ======
+def get_recent_albums(token, artist_id, months=6, retries=3):
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"include_groups": "album,single", "limit": 50}
-    response = requests.get(url, headers=headers, params=params)
-    
-    if response.status_code != 200:
-        print(f"❌ Failed to get albums for artist {artist_id}:", response.status_code, response.text)
-        return []
 
-    try:
-        albums = response.json().get("items", [])
-    except Exception as e:
-        print(f"❌ Failed to parse JSON albums for artist {artist_id}:", e, response.text)
-        return []
-
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
-    recent = []
-    for a in albums:
-        try:
-            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
-        except:
-            continue
-        if date_obj > cutoff:
-            a['parsed_date'] = date_obj
-            recent.append(a)
-    return recent
+    for attempt in range(retries):
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            try:
+                albums = response.json().get("items", [])
+            except Exception as e:
+                print(f"❌ Failed to parse JSON albums for artist {artist_id}:", e, response.text)
+                albums = []
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
+            recent = []
+            for a in albums:
+                try:
+                    date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+                except:
+                    continue
+                if date_obj > cutoff:
+                    a['parsed_date'] = date_obj
+                    recent.append(a)
+            return recent
+        elif response.status_code == 429:
+            wait = int(response.headers.get("Retry-After", 1))
+            print(f"⚠️ Rate limited for artist {artist_id}, waiting {wait} seconds...")
+            time.sleep(wait)
+        else:
+            print(f"❌ Failed to get albums for artist {artist_id}:", response.status_code, response.text)
+            return []
+    return []
 
 # ====== ارسال پیام به تلگرام ======
 def send_album_to_telegram(album, artist_name):
@@ -153,6 +159,7 @@ def handle_button_click(update):
             albums = get_recent_albums(token, artist['id'], months=months)
             for album in albums:
                 send_album_to_telegram(album, artist['name'])
+            time.sleep(0.5)  # نیم ثانیه صبر بین هر هنرمند برای جلوگیری از Rate Limit
 
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
     except Exception as e:
