@@ -1,34 +1,34 @@
 # نصب کتابخانه‌ها:
-# pip install flask requests python-telegram-bot==20.3 pytz
+# pip install flask requests python-telegram-bot==20.5 pytz
 
 from flask import Flask, request
-import os, datetime, requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-import threading, time
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
+import requests
+import threading
+import datetime
+import os
+import pytz
+import time
 
-# ====== تنظیمات Environment Variables ======
+# ====== Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
-RAILWAY_URL = "web-production-1ea15.up.railway.app"
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
+PORT = int(os.environ.get("PORT", 5000))
 
-# ====== چک Environment Variables ======
-for var in ["SPOTIFY_CLIENT_ID","SPOTIFY_CLIENT_SECRET","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","REFRESH_TOKEN"]:
-    if not os.environ.get(var):
-        print(f"ERROR: {var} not set!")
-
-# ====== Flask app ======
+# ====== Flask App ======
 app = Flask(__name__)
 
-# ====== ذخیره ریلیزهای فرستاده شده ======
-sent_albums = set()
-current_interval_days = 30  # پیش فرض یک ماهه
-send_releases_flag = False   # برای دکمه لغو
+# ====== Global ======
+current_job = None
+job_lock = threading.Lock()
+selected_months = 1  # پیشفرض 1 ماه
 
-# ====== Spotify API ======
+# ====== Spotify Functions ======
 def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
@@ -38,120 +38,101 @@ def refresh_access_token(refresh_token):
 def get_followed_artists(token):
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
     headers = {"Authorization": f"Bearer {token}"}
-    res = requests.get(url, headers=headers)
-    return res.json().get("artists", {}).get("items", [])
+    resp = requests.get(url, headers=headers)
+    return resp.json().get("artists", {}).get("items", [])
 
 def get_recent_albums(token, artist_id, months=6):
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
-    params = {"include_groups":"album,single","limit":50}
-    res = requests.get(url, headers=headers, params=params)
-    albums = res.json().get("items", [])
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
+    params = {"include_groups": "album,single", "limit": 50}
+    resp = requests.get(url, headers=headers, params=params)
+    albums = resp.json().get("items", [])
+    cutoff = datetime.datetime.now(pytz.UTC) - datetime.timedelta(days=months*30)
     recent = []
     for a in albums:
         try:
-            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d").replace(tzinfo=pytz.UTC)
         except:
             continue
         if date_obj > cutoff:
             recent.append(a)
     return recent
 
-# ====== ارسال پیام تلگرام ======
-async def send_album_message(bot, album, artist_name):
-    msg = f"🎵 New release by {artist_name}: {album['name']}\nRelease date: {album['release_date']}\n{album['external_urls']['spotify']}"
-    image_url = album['images'][0]['url'] if album['images'] else None
-    if image_url:
-        await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_url, caption=msg)
-    else:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
-
-# ====== Thread چک ریلیز ======
-def release_checker():
-    global sent_albums, current_interval_days, send_releases_flag
-    while True:
-        if send_releases_flag:
-            try:
-                token = refresh_access_token(REFRESH_TOKEN)
-                artists = get_followed_artists(token)
-                for artist in artists:
-                    albums = get_recent_albums(token, artist['id'], months=current_interval_days//30)
-                    for album in albums:
-                        key = f"{artist['id']}_{album['id']}"
-                        if key not in sent_albums:
-                            sent_albums.add(key)
-                            import asyncio
-                            asyncio.run(send_album_message(bot.application.bot, album, artist['name']))
-                time.sleep(300)  # هر ۵ دقیقه
-            except Exception as e:
-                print("Error in release_checker:", e)
-                time.sleep(60)
-        else:
-            time.sleep(2)
-
-# ====== Telegram Bot setup ======
-bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-# ====== دکمه‌ها ======
-def get_keyboard():
+# ====== Telegram Functions ======
+async def send_album_message(context: ContextTypes.DEFAULT_TYPE, artist_name, album):
     keyboard = [
-        [InlineKeyboardButton("یک ماه گذشته", callback_data="30"),
-         InlineKeyboardButton("3 ماه گذشته", callback_data="90")],
-        [InlineKeyboardButton("6 ماه گذشته", callback_data="180"),
-         InlineKeyboardButton("12 ماه گذشته", callback_data="360")],
+        [InlineKeyboardButton("Spotify Link", url=album['external_urls']['spotify'])]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    msg = f"🎵 {artist_name} - {album['name']}\n📅 Release: {album['release_date']}"
+    if album['images']:
+        await context.bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=album['images'][0]['url'], caption=msg, reply_markup=reply_markup)
+    else:
+        await context.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, reply_markup=reply_markup)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("1 ماه گذشته", callback_data="1"),
+         InlineKeyboardButton("3 ماه گذشته", callback_data="3")],
+        [InlineKeyboardButton("6 ماه گذشته", callback_data="6"),
+         InlineKeyboardButton("12 ماه گذشته", callback_data="12")],
         [InlineKeyboardButton("لغو", callback_data="cancel")]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("✅ ربات آماده است! بازه زمانی را انتخاب کنید:", reply_markup=reply_markup)
 
-# ====== هندلرها ======
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global send_releases_flag
-    send_releases_flag = True
-    await update.message.reply_text("✅ Bot started successfully! Choose interval:", reply_markup=get_keyboard())
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_interval_days, send_releases_flag
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global selected_months, current_job
     query = update.callback_query
     await query.answer()
     if query.data == "cancel":
-        send_releases_flag = False
-        await query.edit_message_text("❌ Sending cancelled.")
+        with job_lock:
+            current_job = None
+        await query.edit_message_text("🛑 ارسال ریلیزها لغو شد!")
     else:
-        current_interval_days = int(query.data)
-        send_releases_flag = True
-        await query.edit_message_text(f"⏱ Interval set to last {current_interval_days} days. Checking releases...")
+        selected_months = int(query.data)
+        await query.edit_message_text(f"⏱ بازه انتخاب شد: {selected_months} ماه\nشروع ارسال ریلیزها...")
+        threading.Thread(target=send_releases_job, args=(context.application,), daemon=True).start()
 
-async def help_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Use /start to begin and select interval.")
+# ====== Job Function ======
+def send_releases_job(application):
+    global current_job
+    with job_lock:
+        if current_job is not None:
+            return  # job قبلی هنوز فعال است
+        current_job = True
+    access_token = refresh_access_token(REFRESH_TOKEN)
+    artists = get_followed_artists(access_token)
+    for artist in artists:
+        name = artist['name']
+        albums = get_recent_albums(access_token, artist['id'], months=selected_months)
+        for album in albums:
+            # ارسال هر آلبوم
+            application.create_task(send_album_message(application, name, album))
+            time.sleep(0.3)  # فاصله کوتاه بین پیام‌ها
+    with job_lock:
+        current_job = None
 
-bot.add_handler(CommandHandler("start", start))
-bot.add_handler(CallbackQueryHandler(button))
-bot.add_handler(CommandHandler("help", help_msg))
+# ====== Flask Routes ======
+@app.route("/")
+def index():
+    return "Spotify Telegram Bot is running!"
 
-# ====== Flask webhook ======
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+        return "Forbidden", 403
     data = request.get_json(force=True)
-    from telegram import Bot
-    update = Update.de_json(data, Bot(token=TELEGRAM_BOT_TOKEN))
-    bot.application.update_queue.put_nowait(update)
-    return "OK"
+    app.bot.update_queue.put(data)
+    return "OK", 200
 
-# ====== اجرای Thread ======
-threading.Thread(target=release_checker, daemon=True).start()
-
-# ====== اجرای Flask ======
+# ====== Main ======
 if __name__ == "__main__":
-    import asyncio
-    # ست کردن Webhook خودکار
-    import requests
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook?url=https://{RAILWAY_URL}/webhook"
-    try:
-        requests.get(url)
-    except:
-        pass
-    print("Webhook set:", url)
-    # اجرای bot
-    asyncio.run(bot.run_webhook(listen="0.0.0.0", port=int(os.environ.get("PORT", 8080)), url_path="webhook", webhook_url=f"https://{RAILWAY_URL}/webhook"))
-
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    # ذخیره reference bot برای Flask
+    app.bot = application.bot
+    # راه‌اندازی webhook (در Railway این مسیر باید روی /webhook تنظیم شود)
+    application.run_polling()
+    # برای deployment روی Railway می‌توانید از run_polling() به run_webhook() با URL مناسب استفاده کنید
