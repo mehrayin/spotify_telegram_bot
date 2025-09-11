@@ -10,25 +10,21 @@ import os
 import threading
 import time
 from queue import Queue
-import html
 
 # ====== تنظیمات ======
-SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
+DEEZER_USER_ID = os.environ.get("4049345442")  # ID کاربر Deezer
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
 app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ====== تنظیمات Rate Limit ======
-MAX_WORKERS = 1       # کاهش Worker برای جلوگیری از 429 شدید
-REQUEST_DELAY = 2     # فاصله بین هر درخواست
-album_queue = Queue() # صف ارسال آلبوم‌ها
+# ====== Queue و Worker ======
+MAX_WORKERS = 1
+REQUEST_DELAY = 1
+album_queue = Queue()
 
-# ====== Worker Queue ======
 def worker():
     while True:
         func, args = album_queue.get()
@@ -43,137 +39,73 @@ for _ in range(MAX_WORKERS):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
 
-# ====== Access Token ======
-def refresh_access_token(refresh_token):
-    url = "https://accounts.spotify.com/api/token"
-    data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
-    try:
-        response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
-        if response.status_code != 200:
-            print(f"Spotify token error {response.status_code}: {response.text}")
-            return None
-        res_json = response.json()
-        return res_json.get("access_token")
-    except Exception as e:
-        print("Spotify token request failed:", e)
-        return None
-
-# ====== GET امن با مدیریت 429 ======
-def safe_get(url, headers, retries=5, delay=5):
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", delay))
-                retry_after = min(retry_after, 10)  # سقف 10 ثانیه
-                print(f"Rate limit hit. Sleeping {retry_after} seconds...")
-                time.sleep(retry_after)
-            else:
-                print(f"Spotify GET error {response.status_code}: {response.text}")
-        except Exception as e:
-            print(f"Spotify GET exception: {e}")
-        time.sleep(delay)
-    return None
-
-# ====== گرفتن همه هنرمندان با paging ======
-def get_all_followed_artists(token):
+# ====== گرفتن هنرمندان دنبال‌شده ======
+def get_followed_artists():
+    url = f"https://api.deezer.com/user/{DEEZER_USER_ID}/followings?limit=50"
     artists = []
-    url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
-    headers = {"Authorization": f"Bearer {token}"}
-
     while url:
-        data = safe_get(url, headers)
-        if not data:
-            break
-        items = data.get("artists", {}).get("items", [])
+        resp = requests.get(url).json()
+        items = resp.get("data", [])
         artists.extend(items)
-        url = data.get("artists", {}).get("next")
+        url = resp.get("next")
     return artists
 
-# ====== گرفتن همه آلبوم‌ها با paging ======
-def get_all_albums(token, artist_id):
+# ====== گرفتن آلبوم‌های جدید ======
+def get_recent_albums(artist_id, months=6, max_per_artist=5):
+    url = f"https://api.deezer.com/artist/{artist_id}/albums"
     albums = []
-    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums?include_groups=album,single&limit=50"
-    headers = {"Authorization": f"Bearer {token}"}
-
     while url:
-        data = safe_get(url, headers)
-        if not data:
+        resp = requests.get(url).json()
+        items = resp.get("data", [])
+        cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
+        for a in items:
+            try:
+                date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+            except:
+                continue
+            if date_obj > cutoff:
+                a['parsed_date'] = date_obj
+                albums.append(a)
+            if len(albums) >= max_per_artist:
+                break
+        url = resp.get("next")
+        if len(albums) >= max_per_artist:
             break
-        items = data.get("items", [])
-        albums.extend(items)
-        url = data.get("next")
     return albums
 
-# ====== گرفتن ریلیزهای اخیر ======
-def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
-    all_albums = get_all_albums(token, artist_id)
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
-    recent = []
-    for a in all_albums:
-        try:
-            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
-        except:
-            continue
-        if date_obj > cutoff:
-            a['parsed_date'] = date_obj
-            recent.append(a)
-        if len(recent) >= max_per_artist:
-            break
-    return recent
-
-# ====== ارسال آلبوم‌ها با Queue ======
+# ====== ارسال آلبوم‌ها به تلگرام ======
 def enqueue_album(album, artist_name):
-    print(f"Queueing: {artist_name} - {album['name']}")  # Debug ساده
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-# ====== ارسال آلبوم به تلگرام ======
 def send_album_to_telegram(album, artist_name):
-    text = f"🎵 <b>{html.escape(artist_name)}</b> - {html.escape(album['name'])}<br>" \
+    text = f"🎵 <b>{artist_name}</b> - {album['title']}<br>" \
            f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
-           f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
-
-    photo_url = album['images'][0]['url'] if album.get('images') else None
+           f"<a href='{album['link']}'>لینک Deezer</a>"
+    photo_url = album['cover_medium']
     try:
-        if photo_url:
-            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="HTML")
-        else:
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML")
+        bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="HTML")
     except Exception as e:
         print("Failed to send album:", e)
 
-# ====== پردازش ریلیزها در Thread ======
+# ====== پردازش ریلیزها ======
 def process_albums(months, query):
     try:
-        token = refresh_access_token(REFRESH_TOKEN)
-        if not token:
-            try:
-                query.edit_message_text("❌ خطا: دریافت Access Token ناموفق بود.")
-            except telegram.error.BadRequest:
-                pass
-            return
-
-        artists = get_all_followed_artists(token)
+        artists = get_followed_artists()
         if not artists:
             try:
                 query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
             except telegram.error.BadRequest:
                 pass
             return
-
         try:
             query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
         except telegram.error.BadRequest:
             pass
-
         for artist in artists:
-            albums = get_recent_albums(token, artist['id'], months=months)
+            albums = get_recent_albums(artist['id'], months=months)
             for album in albums:
                 enqueue_album(album, artist['name'])
-
-        album_queue.join()  # منتظر می‌ماند تا همه آلبوم‌ها ارسال شوند
+        album_queue.join()
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
     except Exception as e:
         try:
