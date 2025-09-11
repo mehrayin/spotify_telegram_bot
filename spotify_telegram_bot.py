@@ -1,7 +1,7 @@
 # نصب کتابخانه‌ها:
 # pip install flask requests python-telegram-bot
-
 from flask import Flask
+from flask import request, abort
 import requests
 import telegram
 import threading
@@ -95,3 +95,36 @@ if __name__ == "__main__":
     start_bot_thread()
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
+# ساختن یک شی Bot سراسری (از ENV خوانده می‌شود)
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+bot = telegram.Bot(token=BOT_TOKEN)
+
+# یک SECRET ساده برای تایید اینکه درخواست‌ها از تلگرام میان
+# (در Railway متغیر محیطی WEBHOOK_SECRET را با یک رشته امن قرار بده)
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
+
+@app.route("/webhook", methods=["POST"])
+def telegram_webhook():
+    # بررسی header امنیتی (تلگرام آن را می‌فرستد اگر هنگام setWebhook secret_token تنظیم کرده باشی)
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
+        return ("Forbidden", 403)
+
+    data = request.get_json(force=True)
+    # لاگ کردن خام برای عیب‌یابی (در لاگ‌های Railway ظاهر می‌شود)
+    print("Incoming update:", data)
+
+    try:
+        update = telegram.Update.de_json(data, bot)
+    except Exception as e:
+        print("Failed to parse update:", e)
+        return ("Bad Request", 400)
+
+    # نمونه ساده: اگر پیام متنی اومد جواب بده
+    if update.message and update.message.text:
+        chat_id = update.message.chat.id
+        text = update.message.text
+        bot.send_message(chat_id=chat_id, text=f"پیام دریافت شد. متن: {text}")
+
+    return ("OK", 200)
