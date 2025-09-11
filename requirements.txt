@@ -1,8 +1,8 @@
 flask
 requests
-python-telegram-bot>=20.3
+python-telegram-bot==15
 gunicorn
-pytz
+
 
 
 
