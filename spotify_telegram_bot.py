@@ -23,8 +23,8 @@ app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 # ====== تنظیمات Rate Limit ======
-MAX_WORKERS = 5       # تعداد Worker همزمان
-REQUEST_DELAY = 1   # تأخیر بین هر درخواست (ثانیه)
+MAX_WORKERS = 2       # کاهش تعداد Worker برای جلوگیری از 429
+REQUEST_DELAY = 1     # افزایش فاصله بین هر درخواست (ثانیه)
 album_queue = Queue() # صف ارسال آلبوم‌ها
 
 # ====== Worker Queue ======
@@ -57,13 +57,17 @@ def refresh_access_token(refresh_token):
         print("Spotify token request failed:", e)
         return None
 
-# ====== تابع کمکی برای GET امن با retry ======
-def safe_get(url, headers, retries=3, delay=2):
+# ====== تابع GET امن با retry و مدیریت 429 ======
+def safe_get(url, headers, retries=5, delay=5):
     for attempt in range(retries):
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
                 return response.json()
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", delay))
+                print(f"Rate limit hit. Sleeping {retry_after} seconds...")
+                time.sleep(retry_after)
             else:
                 print(f"Spotify GET error {response.status_code}: {response.text}")
         except Exception as e:
@@ -154,7 +158,6 @@ def process_albums(months, query):
                 pass
             return
 
-        # پیام وضعیت
         try:
             query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
         except telegram.error.BadRequest:
@@ -237,4 +240,3 @@ def telegram_webhook():
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
-
