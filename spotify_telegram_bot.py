@@ -7,7 +7,7 @@ import telegram
 import datetime
 import os
 from apscheduler.schedulers.background import BackgroundScheduler
-from pytz import utc  # یا از pytz.timezone("Asia/Tehran") استفاده کن
+from pytz import utc  # می‌تونی از pytz.timezone("Asia/Tehran") هم استفاده کنی
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -25,6 +25,9 @@ app = Flask(__name__)
 for var_name in ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "REFRESH_TOKEN"]:
     if not os.environ.get(var_name):
         print(f"ERROR: Environment variable {var_name} is NOT set!")
+
+# ====== متغیر برای جلوگیری از ارسال تکراری ======
+sent_albums = set()  # global set برای نگه داشتن آلبوم‌های ارسال شده
 
 # ====== توابع کمکی ======
 def refresh_access_token(refresh_token):
@@ -64,7 +67,9 @@ def send_telegram(message):
         except Exception as e:
             print("Failed to send Telegram message:", e)
 
+# ====== job APScheduler ======
 def send_releases_job():
+    global sent_albums
     try:
         access_token = refresh_access_token(REFRESH_TOKEN)
         if not access_token:
@@ -76,8 +81,12 @@ def send_releases_job():
             artist_id = artist['id']
             albums = get_recent_albums(access_token, artist_id)
             for album in albums:
+                album_id = album['id']
+                if album_id in sent_albums:
+                    continue  # قبلاً ارسال شده
                 msg = f"🎵 New release by {name}: {album['name']}\n{album['external_urls']['spotify']}"
                 send_telegram(msg)
+                sent_albums.add(album_id)
     except Exception as e:
         print("Error in send_releases_job:", e)
 
@@ -112,9 +121,9 @@ def telegram_webhook():
 
     return ("OK", 200)
 
-# ====== APScheduler setup با timezone مشخص ======
-scheduler = BackgroundScheduler(timezone=utc)  # حتما timezone مشخص باشد
-scheduler.add_job(func=send_releases_job, trigger="interval", minutes=5)
+# ====== APScheduler setup ======
+scheduler = BackgroundScheduler(timezone=utc)  # timezone مشخص شده
+scheduler.add_job(func=send_releases_job, trigger="interval", minutes=5)  # هر ۲ دقیقه اجرا شود
 scheduler.start()
 
 # ====== پیام تستی ======
