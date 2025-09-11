@@ -16,6 +16,19 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
+# بررسی متغیرهای محیطی
+required_envs = [
+    ("SPOTIFY_CLIENT_ID", SPOTIFY_CLIENT_ID),
+    ("SPOTIFY_CLIENT_SECRET", SPOTIFY_CLIENT_SECRET),
+    ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
+    ("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID),
+    ("REFRESH_TOKEN", REFRESH_TOKEN)
+]
+
+for name, val in required_envs:
+    if not val:
+        raise ValueError(f"Environment variable {name} is not set!")
+
 app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
@@ -27,7 +40,17 @@ def refresh_access_token(refresh_token):
         "refresh_token": refresh_token
     }
     response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
-    res_json = response.json()
+    
+    if response.status_code != 200:
+        print("❌ Spotify token refresh failed:", response.status_code, response.text)
+        return None
+    
+    try:
+        res_json = response.json()
+    except Exception as e:
+        print("❌ Failed to parse JSON from Spotify:", e, response.text)
+        return None
+
     return res_json.get("access_token")
 
 # ====== گرفتن هنرمندان دنبال‌شده ======
@@ -35,7 +58,18 @@ def get_followed_artists(token):
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(url, headers=headers)
-    return response.json().get("artists", {}).get("items", [])
+    
+    if response.status_code != 200:
+        print("❌ Failed to get followed artists:", response.status_code, response.text)
+        return []
+    
+    try:
+        data = response.json()
+    except Exception as e:
+        print("❌ Failed to parse JSON for followed artists:", e, response.text)
+        return []
+
+    return data.get("artists", {}).get("items", [])
 
 # ====== گرفتن ریلیزهای جدید ======
 def get_recent_albums(token, artist_id, months=6):
@@ -43,7 +77,17 @@ def get_recent_albums(token, artist_id, months=6):
     headers = {"Authorization": f"Bearer {token}"}
     params = {"include_groups": "album,single", "limit": 50}
     response = requests.get(url, headers=headers, params=params)
-    albums = response.json().get("items", [])
+    
+    if response.status_code != 200:
+        print(f"❌ Failed to get albums for artist {artist_id}:", response.status_code, response.text)
+        return []
+
+    try:
+        albums = response.json().get("items", [])
+    except Exception as e:
+        print(f"❌ Failed to parse JSON albums for artist {artist_id}:", e, response.text)
+        return []
+
     cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
     recent = []
     for a in albums:
@@ -69,7 +113,7 @@ def send_album_to_telegram(album, artist_name):
         else:
             bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
     except Exception as e:
-        print("Failed to send album:", e)
+        print("❌ Failed to send album:", e)
 
 # ====== هندلر برای دکمه‌ها ======
 def handle_button_click(update):
@@ -94,8 +138,11 @@ def handle_button_click(update):
     try:
         months = int(data)
         token = refresh_access_token(REFRESH_TOKEN)
-        artists = get_followed_artists(token)
+        if not token:
+            query.edit_message_text("❌ دریافت توکن اسپاتیفای موفقیت‌آمیز نبود.")
+            return
 
+        artists = get_followed_artists(token)
         if not artists:
             query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
             return
@@ -143,6 +190,9 @@ def telegram_webhook():
 
 # ====== اجرای برنامه ======
 if __name__ == "__main__":
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
+    try:
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
+    except Exception as e:
+        print("❌ Failed to send start message:", e)
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
