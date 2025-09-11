@@ -1,28 +1,13 @@
 # نصب کتابخانه‌ها:
 # pip install flask requests python-telegram-bot
-from flask import Flask
-from flask import request, abort
+
+from flask import Flask, request
 import requests
 import telegram
 import threading
 import datetime
 import os
 import time
-from flask import Flask, request
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "Bot is running!"
-
-@app.route("/callback")
-def callback():
-    code = request.args.get("code")
-    if code:
-        return f"Spotify Authorization Code: {code}"
-    else:
-        return "Spotify Authorization - No code found."
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -30,8 +15,24 @@ SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
+# ====== ساخت اپ Flask ======
 app = Flask(__name__)
+
+# ====== مسیر اصلی ======
+@app.route("/")
+def index():
+    return "Spotify Telegram Bot is running!"
+
+# ====== مسیر Callback اسپاتیفای ======
+@app.route("/callback")
+def callback():
+    code = request.args.get("code")
+    if code:
+        return f"Spotify Authorization Code: {code}"
+    else:
+        return "Spotify Authorization - No code found."
 
 # ====== دریافت Access Token با Refresh Token ======
 def refresh_access_token(refresh_token):
@@ -75,7 +76,7 @@ def send_telegram(message):
     bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
     bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
 
-# ====== چک و ارسال ریلیزها ======
+# ====== چک و ارسال ریلیزها در Thread جدا ======
 def send_releases():
     while True:
         try:
@@ -88,46 +89,26 @@ def send_releases():
                 for album in albums:
                     msg = f"🎵 New release by {name}: {album['name']}\n{album['external_urls']['spotify']}"
                     send_telegram(msg)
-            # یک ساعت صبر کن تا دوباره چک کنه
-            time.sleep(3600)
+            time.sleep(3600)  # یک ساعت صبر کن
         except Exception as e:
             print("Error:", e)
             time.sleep(60)
 
-# ====== اجرای Thread برای ارسال ریلیزها ======
 def start_bot_thread():
     thread = threading.Thread(target=send_releases)
     thread.daemon = True
     thread.start()
 
-# ====== مسیر اصلی Flask ======
-@app.route("/")
-def index():
-    return "Spotify Telegram Bot is running!"
-
-# ====== اجرای برنامه ======
-if __name__ == "__main__":
-    start_bot_thread()
-    PORT = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=PORT)
-
-# ساختن یک شی Bot سراسری (از ENV خوانده می‌شود)
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-bot = telegram.Bot(token=BOT_TOKEN)
-
-# یک SECRET ساده برای تایید اینکه درخواست‌ها از تلگرام میان
-# (در Railway متغیر محیطی WEBHOOK_SECRET را با یک رشته امن قرار بده)
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
+# ====== ساخت شی Bot برای Webhook تلگرام ======
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
-    # بررسی header امنیتی (تلگرام آن را می‌فرستد اگر هنگام setWebhook secret_token تنظیم کرده باشی)
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
         return ("Forbidden", 403)
 
     data = request.get_json(force=True)
-    # لاگ کردن خام برای عیب‌یابی (در لاگ‌های Railway ظاهر می‌شود)
     print("Incoming update:", data)
 
     try:
@@ -136,7 +117,6 @@ def telegram_webhook():
         print("Failed to parse update:", e)
         return ("Bad Request", 400)
 
-    # نمونه ساده: اگر پیام متنی اومد جواب بده
     if update.message and update.message.text:
         chat_id = update.message.chat.id
         text = update.message.text
@@ -144,3 +124,8 @@ def telegram_webhook():
 
     return ("OK", 200)
 
+# ====== اجرای برنامه ======
+if __name__ == "__main__":
+    start_bot_thread()
+    PORT = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=PORT)
