@@ -1,5 +1,5 @@
 # نصب کتابخانه‌ها:
-# pip install flask requests python-telegram-bot apscheduler
+# pip install flask requests python-telegram-bot apscheduler pytz
 
 from flask import Flask, request
 import requests
@@ -7,6 +7,7 @@ import telegram
 import datetime
 import os
 from apscheduler.schedulers.background import BackgroundScheduler
+from pytz import utc  # یا از pytz.timezone("Asia/Tehran") استفاده کن
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -111,8 +112,8 @@ def telegram_webhook():
 
     return ("OK", 200)
 
-# ====== APScheduler setup ======
-scheduler = BackgroundScheduler()
+# ====== APScheduler setup با timezone مشخص ======
+scheduler = BackgroundScheduler(timezone=utc)  # حتما timezone مشخص باشد
 scheduler.add_job(func=send_releases_job, trigger="interval", minutes=5)
 scheduler.start()
 
