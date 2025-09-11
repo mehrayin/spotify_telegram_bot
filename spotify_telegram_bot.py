@@ -97,10 +97,10 @@ def get_recent_albums(token, artist_id, months=6):
 def enqueue_album(album, artist_name):
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-# ====== ارسال آلبوم به تلگرام با HTML Mode ======
+# ====== ارسال آلبوم به تلگرام با HTML Mode امن ======
 def send_album_to_telegram(album, artist_name):
-    text = f"🎵 <b>{artist_name}</b> - {album['name']}<br>" \
-           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
+    text = f"🎵 <b>{artist_name}</b> - {album['name']}\n" \
+           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}\n" \
            f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
 
     photo_url = album['images'][0]['url'] if album.get('images') else None
