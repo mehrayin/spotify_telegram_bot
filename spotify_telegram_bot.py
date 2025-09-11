@@ -116,7 +116,7 @@ def send_releases():
         except Exception as e:
             print("Error:", e)
             time.sleep(60)
-
+print("DEBUG: TELEGRAM_BOT_TOKEN =", os.environ.get("TELEGRAM_BOT_TOKEN"))
 def start_bot_thread():
     thread = threading.Thread(target=send_releases)
     thread.daemon = True
@@ -156,4 +156,5 @@ if __name__ == "__main__":
     start_bot_thread()        # Thread چک ریلیزها
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
 
