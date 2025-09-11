@@ -97,24 +97,18 @@ def get_recent_albums(token, artist_id, months=6):
 def enqueue_album(album, artist_name):
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
-# ====== ارسال آلبوم به تلگرام با MarkdownV2 امن ======
+# ====== ارسال آلبوم به تلگرام با HTML Mode ======
 def send_album_to_telegram(album, artist_name):
-    def escape_md(text):
-        escape_chars = r'\_*[]()~`>#+-=|{}.!'
-        for c in escape_chars:
-            text = text.replace(c, f"\\{c}")
-        return text
-
-    text = f"🎵 *{escape_md(artist_name)}* - {escape_md(album['name'])}\n" \
-           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}\n" \
-           f"[لینک اسپاتیفای]({album['external_urls']['spotify']})"
+    text = f"🎵 <b>{artist_name}</b> - {album['name']}<br>" \
+           f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
+           f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
 
     photo_url = album['images'][0]['url'] if album.get('images') else None
     try:
         if photo_url:
-            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="MarkdownV2")
+            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="HTML")
         else:
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="MarkdownV2")
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML")
     except Exception as e:
         print("Failed to send album:", e)
 
