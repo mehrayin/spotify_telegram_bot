@@ -75,6 +75,13 @@ def get_recent_albums(token, artist_id, months=6):
 def send_telegram(message):
     bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
     bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+def send_test_message():
+    try:
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Test message: Bot is running!")
+        print("Test message sent successfully!")
+    except Exception as e:
+        print("Failed to send test message:", e)
 
 # ====== چک و ارسال ریلیزها در Thread جدا ======
 def send_releases():
@@ -98,6 +105,7 @@ def start_bot_thread():
     thread = threading.Thread(target=send_releases)
     thread.daemon = True
     thread.start()
+send_test_message()
 
 # ====== ساخت شی Bot برای Webhook تلگرام ======
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
@@ -129,4 +137,5 @@ if __name__ == "__main__":
     start_bot_thread()
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
 
