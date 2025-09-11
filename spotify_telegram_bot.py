@@ -8,9 +8,8 @@ import threading
 import datetime
 import os
 import time
-import sys
 
-# ====== چک و گرفتن Environment Variables ======
+# ====== خواندن متغیرهای محیطی ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -18,25 +17,19 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
 
-# ====== بررسی اینکه همه متغیرها ست شده باشند ======
+# ====== چک کردن متغیرهای محیطی ======
 missing_vars = []
-for var_name, var_value in [
-    ("SPOTIFY_CLIENT_ID", SPOTIFY_CLIENT_ID),
-    ("SPOTIFY_CLIENT_SECRET", SPOTIFY_CLIENT_SECRET),
-    ("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN),
-    ("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID),
-    ("REFRESH_TOKEN", REFRESH_TOKEN)
-]:
-    if not var_value:
+for var_name in ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "REFRESH_TOKEN"]:
+    if not os.environ.get(var_name):
         missing_vars.append(var_name)
 
 if missing_vars:
     print("===========================================")
     print("ERROR: The following environment variables are NOT set:")
-    for v in missing_vars:
-        print(" -", v)
+    for var in missing_vars:
+        print(" -", var)
     print("===========================================")
-    sys.exit(1)  # متوقف کردن اجرای برنامه
+    exit(1)
 
 # ====== ساخت اپ Flask ======
 app = Flask(__name__)
@@ -128,6 +121,9 @@ def start_bot_thread():
     thread.daemon = True
     thread.start()
 
+# ====== اجرای تست پیام ======
+send_test_message()
+
 # ====== ساخت شی Bot برای Webhook تلگرام ======
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
@@ -155,8 +151,6 @@ def telegram_webhook():
 
 # ====== اجرای برنامه ======
 if __name__ == "__main__":
-    print("==== Debug: All required environment variables are set ====")
     start_bot_thread()
-    send_test_message()
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
