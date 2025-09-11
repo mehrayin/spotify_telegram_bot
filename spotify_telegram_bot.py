@@ -8,6 +8,21 @@ import threading
 import datetime
 import os
 import time
+from flask import Flask, request
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Bot is running!"
+
+@app.route("/callback")
+def callback():
+    code = request.args.get("code")
+    if code:
+        return f"Spotify Authorization Code: {code}"
+    else:
+        return "Spotify Authorization - No code found."
 
 # ====== تنظیمات از Environment Variables ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -128,3 +143,4 @@ def telegram_webhook():
         bot.send_message(chat_id=chat_id, text=f"پیام دریافت شد. متن: {text}")
 
     return ("OK", 200)
+
