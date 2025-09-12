@@ -1,7 +1,7 @@
 # نصب کتابخانه‌ها:
 # pip install flask requests python-telegram-bot==20.6
 
-from flask import Flask, request, redirect
+from flask import Flask, request
 import requests
 import telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,21 +12,22 @@ import time
 from queue import Queue
 
 # ====== تنظیمات ======
-DEEZER_APP_ID = os.environ.get("DEEZER_APP_ID")
-DEEZER_APP_SECRET = os.environ.get("DEEZER_APP_SECRET")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value")
-REDIRECT_URI = os.environ.get("REDIRECT_URI", "https://yourserver.com/deezer_callback")  # جایگزین با URL وبهوک
 
 app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ====== Queue و Worker ======
-MAX_WORKERS = 1
-REQUEST_DELAY = 1
-album_queue = Queue()
+# ====== تنظیمات Rate Limit ======
+MAX_WORKERS = 1       # کاهش Worker برای جلوگیری از 429 شدید
+REQUEST_DELAY = 2     # افزایش فاصله بین هر درخواست
+album_queue = Queue() # صف ارسال آلبوم‌ها
 
+# ====== Worker Queue ======
 def worker():
     while True:
         func, args = album_queue.get()
@@ -41,92 +42,123 @@ for _ in range(MAX_WORKERS):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
 
-# ====== ذخیره Access Token ======
-ACCESS_TOKENS = {}  # chat_id -> access_token
+# ====== Access Token ======
+def refresh_access_token(refresh_token):
+    url = "https://accounts.spotify.com/api/token"
+    data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
+    try:
+        response = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
+        if response.status_code != 200:
+            print(f"Spotify token error {response.status_code}: {response.text}")
+            return None
+        res_json = response.json()
+        return res_json.get("access_token")
+    except Exception as e:
+        print("Spotify token request failed:", e)
+        return None
 
-# ====== مرحله 1: لینک احراز هویت ======
-def get_deezer_auth_link(chat_id):
-    url = f"https://connect.deezer.com/oauth/auth.php?app_id={DEEZER_APP_ID}&redirect_uri={REDIRECT_URI}&perms=basic_access,email,listening_history,followings&state={chat_id}"
-    return url
+# ====== GET امن با مدیریت 429 و سقف Retry-After ======
+def safe_get(url, headers, retries=5, delay=5):
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", delay))
+                retry_after = min(retry_after, 10)  # سقف 10 ثانیه
+                print(f"Rate limit hit. Sleeping {retry_after} seconds...")
+                time.sleep(retry_after)
+            else:
+                print(f"Spotify GET error {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"Spotify GET exception: {e}")
+        time.sleep(delay)
+    return None
 
-# ====== مرحله 2: Callback Deezer ======
-@app.route("/deezer_callback")
-def deezer_callback():
-    code = request.args.get("code")
-    state = request.args.get("state")  # chat_id
-    if not code or not state:
-        return "Invalid request"
-    
-    # گرفتن Access Token
-    token_url = f"https://connect.deezer.com/oauth/access_token.php?app_id={DEEZER_APP_ID}&secret={DEEZER_APP_SECRET}&code={code}&output=json"
-    resp = requests.get(token_url).json()
-    access_token = resp.get("access_token")
-    if not access_token:
-        return "Failed to get access token"
-    
-    ACCESS_TOKENS[state] = access_token
-    bot.send_message(chat_id=state, text="✅ Deezer احراز هویت شد! حالا می‌توانید ریلیزهای جدید را ببینید.")
-    return "Authentication successful. می‌توانید صفحه تلگرام خود را باز کنید."
-
-# ====== گرفتن هنرمندان دنبال‌شده ======
-def get_followed_artists(access_token):
-    url = f"https://api.deezer.com/user/me/followings?access_token={access_token}&limit=50"
+# ====== گرفتن همه هنرمندان با paging ======
+def get_all_followed_artists(token):
     artists = []
+    url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
+    headers = {"Authorization": f"Bearer {token}"}
+
     while url:
-        resp = requests.get(url).json()
-        items = resp.get("data", [])
+        data = safe_get(url, headers)
+        if not data:
+            break
+        items = data.get("artists", {}).get("items", [])
         artists.extend(items)
-        url = resp.get("next")
+        url = data.get("artists", {}).get("next")
     return artists
 
-# ====== گرفتن آلبوم‌های جدید ======
-def get_recent_albums(artist_id, months=6, max_per_artist=5):
-    url = f"https://api.deezer.com/artist/{artist_id}/albums"
+# ====== گرفتن همه آلبوم‌ها با paging ======
+def get_all_albums(token, artist_id):
     albums = []
+    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums?include_groups=album,single&limit=50"
+    headers = {"Authorization": f"Bearer {token}"}
+
     while url:
-        resp = requests.get(url).json()
-        items = resp.get("data", [])
-        cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
-        for a in items:
-            try:
-                date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
-            except:
-                continue
-            if date_obj > cutoff:
-                a['parsed_date'] = date_obj
-                albums.append(a)
-            if len(albums) >= max_per_artist:
-                break
-        url = resp.get("next")
-        if len(albums) >= max_per_artist:
+        data = safe_get(url, headers)
+        if not data:
             break
+        items = data.get("items", [])
+        albums.extend(items)
+        url = data.get("next")
     return albums
 
-# ====== ارسال آلبوم‌ها به تلگرام ======
+# ====== گرفتن ریلیزهای اخیر ======
+def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
+    all_albums = get_all_albums(token, artist_id)
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
+    recent = []
+    for a in all_albums:
+        try:
+            date_obj = datetime.datetime.strptime(a['release_date'], "%Y-%m-%d")
+        except:
+            continue
+        if date_obj > cutoff:
+            a['parsed_date'] = date_obj
+            recent.append(a)
+        if len(recent) >= max_per_artist:
+            break
+    return recent
+
+# ====== ارسال آلبوم‌ها با Queue ======
 def enqueue_album(album, artist_name):
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
+# ====== ارسال آلبوم به تلگرام با HTML Mode ======
 def send_album_to_telegram(album, artist_name):
-    text = f"🎵 <b>{artist_name}</b> - {album['title']}<br>" \
+    text = f"🎵 <b>{artist_name}</b> - {album['name']}<br>" \
            f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}<br>" \
-           f"<a href='{album['link']}'>لینک Deezer</a>"
-    photo_url = album.get('cover_medium')
+           f"<a href='{album['external_urls']['spotify']}'>لینک اسپاتیفای</a>"
+
+    photo_url = album['images'][0]['url'] if album.get('images') else None
     try:
-        bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="HTML")
+        if photo_url:
+            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=photo_url, caption=text, parse_mode="HTML")
+        else:
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="HTML")
     except Exception as e:
         print("Failed to send album:", e)
 
-# ====== پردازش ریلیزها ======
-def process_albums(chat_id, months, query):
+# ====== پردازش ریلیزها در Thread ======
+def process_albums(months, query):
     try:
-        access_token = ACCESS_TOKENS.get(chat_id)
-        if not access_token:
-            bot.send_message(chat_id=chat_id, text=f"❌ ابتدا باید حساب Deezer خود را احراز هویت کنید:\n{get_deezer_auth_link(chat_id)}")
+        token = refresh_access_token(REFRESH_TOKEN)
+        if not token:
+            try:
+                query.edit_message_text("❌ خطا: دریافت Access Token ناموفق بود.")
+            except telegram.error.BadRequest:
+                pass
             return
 
-        artists = get_followed_artists(access_token)
+        artists = get_all_followed_artists(token)
         if not artists:
-            bot.send_message(chat_id=chat_id, text="هیچ هنرمندی دنبال نشده است.")
+            try:
+                query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            except telegram.error.BadRequest:
+                pass
             return
 
         try:
@@ -135,12 +167,12 @@ def process_albums(chat_id, months, query):
             pass
 
         for artist in artists:
-            albums = get_recent_albums(artist['id'], months=months)
+            albums = get_recent_albums(token, artist['id'], months=months)
             for album in albums:
                 enqueue_album(album, artist['name'])
 
-        album_queue.join()
-        bot.send_message(chat_id=chat_id, text="✅ نمایش ریلیزها تمام شد.")
+        album_queue.join()  # منتظر می‌ماند تا همه آلبوم‌ها ارسال شوند
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
     except Exception as e:
         try:
             query.edit_message_text(f"❌ خطا: {e}")
@@ -151,7 +183,6 @@ def process_albums(chat_id, months, query):
 def handle_button_click(update):
     query = update.callback_query
     data = query.data
-    chat_id = str(query.message.chat.id)
 
     if data == "cancel":
         keyboard = [
@@ -171,7 +202,7 @@ def handle_button_click(update):
 
     try:
         months = int(data)
-        threading.Thread(target=process_albums, args=(chat_id, months, query), daemon=True).start()
+        threading.Thread(target=process_albums, args=(months, query), daemon=True).start()
     except Exception as e:
         try:
             query.edit_message_text(f"❌ خطا: {e}")
