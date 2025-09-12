@@ -24,7 +24,7 @@ bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
 # ====== تنظیمات Queue و Rate Limit ======
 MAX_WORKERS = 1       # تعداد Workerها
-BASE_DELAY = 1        # فاصله بین ارسال‌ها در حالت عادی
+BASE_DELAY = 5        # فاصله بین ارسال‌ها در حالت عادی
 MAX_RETRIES = 5       # تعداد retry حداکثر
 album_queue = Queue()
 
@@ -261,3 +261,4 @@ def telegram_webhook():
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
