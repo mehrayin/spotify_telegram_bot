@@ -114,6 +114,12 @@ def handle_button_click(update):
 # ====== وبهوک تلگرام ======
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
+    @app.route("/webhook", methods=["POST"])
+def telegram_webhook():
+    print("==== WEBHOOK HIT ====")  # اضافه کردن
+    data = request.get_json(force=True)
+    print(data)  # برای بررسی payload تلگرام
+
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
         return ("Forbidden", 403)
@@ -146,3 +152,4 @@ if __name__ == "__main__":
     bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
