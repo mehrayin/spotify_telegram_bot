@@ -56,7 +56,7 @@ def get_recent_albums(token, artist_id, months=6):
             recent.append(a)
     return recent
 
-# ====== ارسال پیام به تلگرام ======
+# ====== ارسال پیام به تلگرام با مدیریت خطا ======
 def send_album_to_telegram(album, artist_name):
     text = f"🎵 *{artist_name}* - {album['name']}\n" \
            f"📅 {album['parsed_date'].strftime('%Y-%m-%d')}\n" \
@@ -69,9 +69,9 @@ def send_album_to_telegram(album, artist_name):
         else:
             bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
     except Exception as e:
-        print("Failed to send album:", e)
+        print("⚠️ Failed to send album:", e)
 
-# ====== هندلر برای دکمه‌ها ======
+# ====== هندلر دکمه‌ها ======
 def handle_button_click(update):
     query = update.callback_query
     data = query.data
@@ -85,10 +85,13 @@ def handle_button_click(update):
             [InlineKeyboardButton("❌ لغو", callback_data="cancel")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        query.edit_message_text(
-            "✅ عملیات لغو شد.\nدوباره یکی از بازه‌های زمانی رو انتخاب کن:",
-            reply_markup=reply_markup
-        )
+        try:
+            query.edit_message_text(
+                "✅ عملیات لغو شد.\nدوباره یکی از بازه‌های زمانی رو انتخاب کن:",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print("⚠️ Failed to edit message:", e)
         return
 
     try:
@@ -97,19 +100,32 @@ def handle_button_click(update):
         artists = get_followed_artists(token)
 
         if not artists:
-            query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            try:
+                query.edit_message_text("هیچ هنرمندی دنبال نشده است.")
+            except:
+                pass
             return
 
-        query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+        try:
+            query.edit_message_text(f"⏳ در حال گرفتن ریلیزهای {months} ماه گذشته...")
+        except:
+            pass
 
         for artist in artists:
             albums = get_recent_albums(token, artist['id'], months=months)
             for album in albums:
                 send_album_to_telegram(album, artist['name'])
 
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
+        try:
+            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
+        except:
+            pass
+
     except Exception as e:
-        query.edit_message_text(f"❌ خطا: {e}")
+        try:
+            query.edit_message_text(f"❌ خطا: {e}")
+        except:
+            print("⚠️ Error handling button:", e)
 
 # ====== وبهوک تلگرام ======
 @app.route("/webhook", methods=["POST"])
@@ -130,11 +146,14 @@ def telegram_webhook():
             [InlineKeyboardButton("❌ لغو", callback_data="cancel")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        bot.send_message(
-            chat_id=update.message.chat.id,
-            text="🤖 ربات آماده به کار است.\nیکی از بازه‌های زمانی را انتخاب کنید:",
-            reply_markup=reply_markup
-        )
+        try:
+            bot.send_message(
+                chat_id=update.message.chat.id,
+                text="🤖 ربات آماده به کار است.\nیکی از بازه‌های زمانی را انتخاب کنید:",
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            print("⚠️ Failed to send /start message:", e)
 
     elif update.callback_query:
         handle_button_click(update)
@@ -143,6 +162,6 @@ def telegram_webhook():
 
 # ====== اجرای برنامه ======
 if __name__ == "__main__":
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
     PORT = int(os.environ.get("PORT", 5000))
+    print("🚀 Bot is starting... waiting for /start via webhook")
     app.run(host="0.0.0.0", port=PORT)
