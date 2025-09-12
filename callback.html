@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Spotify Callback</title>
+  </head>
+  <body>
+    <h1>Spotify Authorization</h1>
+    <p id="code"></p>
+
+    <script>
+      // اینجا کدی که اسپاتیفای برگردونده رو از URL می‌گیریم
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      if (code) {
+        document.getElementById("code").innerText = "Your code: " + code;
+        console.log("Code:", code);
+      } else {
+        document.getElementById("code").innerText = "No code found.";
+      }
+    </script>
+  </body>
+</html>
