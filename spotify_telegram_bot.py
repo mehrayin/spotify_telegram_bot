@@ -117,8 +117,9 @@ def telegram_webhook():
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
         return ("Forbidden", 403)
-
+     print("==== WEBHOOK HIT ====")
     data = request.get_json(force=True)
+    print("Payload received:", data)
     update = telegram.Update.de_json(data, bot)
 
     if update.message and update.message.text == "/start":
@@ -146,5 +147,6 @@ if __name__ == "__main__":
     bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
+
 
 
