@@ -1,7 +1,9 @@
 flask
 requests
-python-telegram-bot==13.15
+pip uninstall python-telegram-bot
+pip install "python-telegram-bot<20"
 gunicorn
+
 
 
 
