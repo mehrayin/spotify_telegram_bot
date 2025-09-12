@@ -22,11 +22,11 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change_this_to_a_random_value
 app = Flask(__name__)
 bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
 
-# ====== تنظیمات Rate Limit ======
-MAX_WORKERS = 1        # کاهش Worker برای جلوگیری از 429 شدید
-REQUEST_DELAY = 1      # فاصله بین ارسال‌ها در حالت عادی
-MAX_RETRIES = 5        # تعداد retry حداکثر
-album_queue = Queue()  # صف ارسال آلبوم‌ها
+# ====== تنظیمات Queue و Rate Limit ======
+MAX_WORKERS = 1       # تعداد Workerها
+BASE_DELAY = 1        # فاصله بین ارسال‌ها در حالت عادی
+MAX_RETRIES = 5       # تعداد retry حداکثر
+album_queue = Queue()
 
 # ====== Worker Queue ======
 def worker():
@@ -37,7 +37,7 @@ def worker():
         except Exception as e:
             print("Worker error:", e)
         album_queue.task_done()
-        time.sleep(REQUEST_DELAY)
+        time.sleep(BASE_DELAY)
 
 for _ in range(MAX_WORKERS):
     t = threading.Thread(target=worker, daemon=True)
@@ -58,13 +58,16 @@ def refresh_access_token(refresh_token):
         print("Spotify token request failed:", e)
         return None
 
-# ====== GET امن با Exponential Backoff ======
-def safe_get(url, headers, retries=MAX_RETRIES, delay=1):
+# ====== GET امن با Exponential Backoff خودتنظیم شونده ======
+def safe_get(url, headers, retries=MAX_RETRIES, base_delay=BASE_DELAY):
     attempt = 0
+    delay = base_delay
     while attempt < retries:
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
+                # کاهش تدریجی delay بعد از موفقیت
+                delay = max(base_delay, delay / 2)
                 return response.json()
             elif response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
@@ -75,6 +78,8 @@ def safe_get(url, headers, retries=MAX_RETRIES, delay=1):
                 retry_after = min(retry_after, 60)
                 print(f"[{attempt+1}/{retries}] Rate limit hit. Sleeping {retry_after} seconds...")
                 time.sleep(retry_after)
+                # افزایش تدریجی delay برای جلوگیری از Rate Limit دوباره
+                delay = min(60, delay * 1.5)
             else:
                 print(f"Spotify GET error {response.status_code}: {response.text}")
         except requests.exceptions.RequestException as e:
@@ -84,7 +89,7 @@ def safe_get(url, headers, retries=MAX_RETRIES, delay=1):
     print(f"Failed to get {url} after {retries} attempts.")
     return None
 
-# ====== گرفتن همه هنرمندان با paging ======
+# ====== گرفتن همه هنرمندان ======
 def get_all_followed_artists(token):
     artists = []
     url = "https://api.spotify.com/v1/me/following?type=artist&limit=50"
@@ -99,7 +104,7 @@ def get_all_followed_artists(token):
         url = data.get("artists", {}).get("next")
     return artists
 
-# ====== گرفتن همه آلبوم‌ها با paging ======
+# ====== گرفتن همه آلبوم‌ها ======
 def get_all_albums(token, artist_id):
     albums = []
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums?include_groups=album,single&limit=50"
@@ -121,7 +126,6 @@ def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
     recent = []
     for a in all_albums:
         date_obj = None
-        # پشتیبانی از فرمت‌های مختلف تاریخ
         for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
             try:
                 date_obj = datetime.datetime.strptime(a['release_date'], fmt)
@@ -137,7 +141,7 @@ def get_recent_albums(token, artist_id, months=6, max_per_artist=5):
             break
     return recent
 
-# ====== ارسال آلبوم‌ها با Queue ======
+# ====== ارسال آلبوم‌ها به Queue ======
 def enqueue_album(album, artist_name):
     album_queue.put((send_album_to_telegram, (album, artist_name)))
 
@@ -156,7 +160,7 @@ def send_album_to_telegram(album, artist_name):
     except Exception as e:
         print("Failed to send album:", e)
 
-# ====== پردازش ریلیزها در Thread ======
+# ====== پردازش ریلیزها ======
 def process_albums(months, query):
     try:
         token = refresh_access_token(REFRESH_TOKEN)
@@ -185,7 +189,7 @@ def process_albums(months, query):
             for album in albums:
                 enqueue_album(album, artist['name'])
 
-        album_queue.join()  # منتظر می‌ماند تا همه آلبوم‌ها ارسال شوند
+        album_queue.join()
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ نمایش ریلیزها تمام شد.")
     except Exception as e:
         try:
@@ -257,5 +261,3 @@ def telegram_webhook():
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
-
-
