@@ -1,5 +1,5 @@
 # نصب کتابخانه‌ها:
-# pip install flask requests python-telegram-bot
+# pip install flask requests python-telegram-bot>=20 gunicorn
 
 from flask import Flask, request
 import requests
@@ -71,7 +71,7 @@ def send_album_to_telegram(album, artist_name):
     except Exception as e:
         print("Failed to send album:", e)
 
-# ====== هندلر برای دکمه‌ها ======
+# ====== هندلر دکمه‌ها ======
 def handle_button_click(update):
     query = update.callback_query
     data = query.data
@@ -114,10 +114,15 @@ def handle_button_click(update):
 # ====== وبهوک تلگرام ======
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
+    print("==== WEBHOOK HIT ====")  # لاگ مهم
+    data = request.get_json(force=True)
+    print("Payload received:", data)
+
     header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if WEBHOOK_SECRET and header_secret != WEBHOOK_SECRET:
+        print("Forbidden: secret mismatch")
         return ("Forbidden", 403)
-    data = request.get_json(force=True)
+
     update = telegram.Update.de_json(data, bot)
 
     if update.message and update.message.text == "/start":
@@ -142,10 +147,10 @@ def telegram_webhook():
 
 # ====== اجرای برنامه ======
 if __name__ == "__main__":
-    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Bot started successfully!")
+    try:
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="🚀 Bot started successfully!")
+    except Exception as e:
+        print("Failed to send startup message:", e)
+
     PORT = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=PORT)
-
-
-
-
