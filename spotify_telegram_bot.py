@@ -22,6 +22,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 REQUEST_DELAY = 0.3  # فاصله بین درخواست‌ها (ثانیه)
 CACHE_FILE = "spotify_cache.db"
 CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
+SENT_ALBUMS_FILE = "sent_albums.db"
 
 bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -127,7 +128,7 @@ def cached_get_albums(token: str, artist_id: str, months=1) -> List[Dict]:
         db[key] = {"ts": now, "recent_albums": minimal}
         return minimal
 
-# ====== فانکشن اصلی ارسال ریلیزها ======
+# ====== ارسال ریلیزهای جدید بدون تکرار ======
 def send_recent_releases_to_telegram(chat_id, months=1):
     try:
         bot.send_message(chat_id, "⏳ در حال بررسی ریلیزهای جدید...")
@@ -135,35 +136,45 @@ def send_recent_releases_to_telegram(chat_id, months=1):
         artists = get_all_followed_artists(token)
 
         results = []
-        for artist in artists:
-            artist_id = artist["id"]
-            artist_name = artist.get("name")
-            time.sleep(REQUEST_DELAY)
-            try:
-                recent_albums = cached_get_albums(token, artist_id, months=months)
-                for album in recent_albums:
-                    results.append({
-                        "artist": artist_name,
-                        "album": album["name"],
-                        "date": album["release_date"],
-                        "url": album["external_url"],
-                        "image": album["image"]
-                    })
-            except Exception as e:
-                print(f"Failed for {artist_name}: {e}")
+        with shelve.open(SENT_ALBUMS_FILE) as sent_db:
+            for artist in artists:
+                artist_id = artist["id"]
+                artist_name = artist.get("name")
+                time.sleep(REQUEST_DELAY)
+                try:
+                    recent_albums = cached_get_albums(token, artist_id, months=months)
+                    for album in recent_albums:
+                        album_id = album["id"]
+                        if sent_db.get(album_id):
+                            continue  # قبلاً فرستاده شده
+                        results.append({
+                            "artist": artist_name,
+                            "album": album["name"],
+                            "date": album["release_date"],
+                            "url": album["external_url"],
+                            "image": album["image"],
+                            "id": album_id
+                        })
+                        # علامت گذاری به عنوان فرستاده شده
+                        sent_db[album_id] = True
+                except Exception as e:
+                    print(f"Failed for {artist_name}: {e}")
 
         count = len(results)
-        bot.send_message(chat_id, f"📊 تعداد کل ریلیزهای {months} ماه گذشته: {count}")
+        if count == 0:
+            bot.send_message(chat_id, "✅ هیچ ریلیز جدیدی برای این بازه وجود ندارد.")
+        else:
+            bot.send_message(chat_id, f"📊 تعداد ریلیزهای جدید: {count}")
+            for r in results:
+                text = escape_markdown(f"🎵 {r['artist']} - {r['album']}\n📅 {r['date']}\n🔗 {r['url']}")
+                try:
+                    if r['image']:
+                        bot.send_photo(chat_id, r['image'], caption=text)
+                    else:
+                        bot.send_message(chat_id, text)
+                except Exception as e:
+                    print("Failed to send album:", e)
 
-        for r in results:
-            text = escape_markdown(f"🎵 {r['artist']} - {r['album']}\n📅 {r['date']}\n🔗 {r['url']}")
-            try:
-                if r['image']:
-                    bot.send_photo(chat_id, r['image'], caption=text)
-                else:
-                    bot.send_message(chat_id, text)
-            except Exception as e:
-                print("Failed to send album:", e)
     except Exception as e:
         print("Error in send_recent_releases_to_telegram:", e)
 
