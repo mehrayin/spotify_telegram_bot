@@ -15,7 +15,7 @@ REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-REQUEST_DELAY = 0.22
+REQUEST_DELAY = 0.9
 CACHE_FILE = "spotify_cache.json"
 SENT_ALBUMS_FILE = "sent_albums.json"
 CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
@@ -178,3 +178,4 @@ def handle_update(update_json):
 # ===== Run Flask =====
 if __name__ == "__main__":
     app.run(port=8080)
+
