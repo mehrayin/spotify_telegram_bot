@@ -4,8 +4,8 @@ import datetime
 import json
 import aiohttp
 import asyncio
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -144,7 +144,6 @@ async def send_recent_releases_file(bot, chat_id, months=1):
         await bot.send_message(chat_id=chat_id, text="هیچ ریلیز جدیدی در یک ماه گذشته وجود ندارد.")
         return
 
-    # ساخت فایل TXT و ارسال
     file_name = "recent_releases.txt"
     with open(file_name, "w", encoding="utf-8") as f:
         f.write("\n".join(all_lines))
@@ -168,22 +167,15 @@ async def button(update, context):
         asyncio.create_task(send_recent_releases_file(context.bot, query.message.chat.id, months=1))
 
 # ===== Run Bot =====
-from telegram.ext import Application
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-print("TELEGRAM_TOKEN:", TELEGRAM_TOKEN)
-
 if not TELEGRAM_TOKEN:
     raise ValueError("متغیر محیطی TELEGRAM_TOKEN تنظیم نشده است!")
-
 
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 
+# ===== Railway / Production =====
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("this_file_name:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), reload=True)
-
-
-
-
+    print("Starting Telegram Bot...")
+    asyncio.run(app.run_polling())
