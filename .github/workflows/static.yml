@@ -1,4 +1,3 @@
-# Simple workflow for deploying static content to GitHub Pages
 name: Deploy static content to Pages
 
 on:
@@ -23,13 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@7e3d0b6a14f1b2c9c6d8b6f7a3d1e0b5c6d7f8a9
+        uses: actions/checkout@v3
       - name: Setup Pages
-        uses: actions/configure-pages@0fa4e4f048c2a7b5e5c6d7f8b9a0c1d2e3f4b5c6
+        uses: actions/configure-pages@v2
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@21f5b0c2a1d3e4f5b6c7d8e9a0b1c2d3e4f5b6c7
+        uses: actions/upload-pages-artifact@v1
         with:
           path: '.'
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@1c2d3e4f5b6c7d8e9a0b1c2d3e4f5b6c7d8e9a0b
+        uses: actions/deploy-pages@v1
