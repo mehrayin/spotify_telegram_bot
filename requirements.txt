@@ -1,10 +1,11 @@
 flask
-flask[async]==2.3.3
+flask[async]
 requests
 python-telegram-bot>=20
 aiohttp
 nest-asyncio
 gunicorn
+
 
 
 
