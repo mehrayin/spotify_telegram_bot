@@ -10,7 +10,7 @@ import re
 from threading import Thread
 from typing import List, Dict
 from flask import Flask, request
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot
 
 # ====== تنظیمات ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -19,9 +19,9 @@ REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-REQUEST_DELAY = 0.3  # فاصله بین درخواست‌ها (ثانیه)
+REQUEST_DELAY = 0.3
 CACHE_FILE = "spotify_cache.db"
-CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
+CACHE_TTL_SECONDS = 60 * 60 * 6
 SENT_ALBUMS_FILE = "sent_albums.db"
 
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -29,7 +29,6 @@ app = Flask(__name__)
 
 # ====== فانکشن‌های کمکی ======
 def escape_markdown(text: str) -> str:
-    """Escape کاراکترهای خاص MarkdownV2 برای تلگرام"""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
@@ -144,36 +143,21 @@ def send_recent_releases_to_telegram(chat_id, months=1):
                 try:
                     recent_albums = cached_get_albums(token, artist_id, months=months)
                     for album in recent_albums:
-                        album_id = album["id"]
-                        if sent_db.get(album_id):
-                            continue  # قبلاً فرستاده شده
-                        results.append({
-                            "artist": artist_name,
-                            "album": album["name"],
-                            "date": album["release_date"],
-                            "url": album["external_url"],
-                            "image": album["image"],
-                            "id": album_id
-                        })
-                        # علامت گذاری به عنوان فرستاده شده
-                        sent_db[album_id] = True
+                        album_id = album.get("id")
+                        if not album_id or album_id in sent_db:
+                            continue
+                        sent_db[album_id] = True  # علامت گذاری
+
+                        text = escape_markdown(f"🎵 {artist_name} - {album['name']}\n📅 {album['release_date']}\n🔗 {album.get('external_url')}")
+                        try:
+                            if album.get("image"):
+                                bot.send_photo(chat_id, album["image"], caption=text)
+                            else:
+                                bot.send_message(chat_id, text)
+                        except Exception as e:
+                            print("Failed to send album:", e)
                 except Exception as e:
                     print(f"Failed for {artist_name}: {e}")
-
-        count = len(results)
-        if count == 0:
-            bot.send_message(chat_id, "✅ هیچ ریلیز جدیدی برای این بازه وجود ندارد.")
-        else:
-            bot.send_message(chat_id, f"📊 تعداد ریلیزهای جدید: {count}")
-            for r in results:
-                text = escape_markdown(f"🎵 {r['artist']} - {r['album']}\n📅 {r['date']}\n🔗 {r['url']}")
-                try:
-                    if r['image']:
-                        bot.send_photo(chat_id, r['image'], caption=text)
-                    else:
-                        bot.send_message(chat_id, text)
-                except Exception as e:
-                    print("Failed to send album:", e)
 
     except Exception as e:
         print("Error in send_recent_releases_to_telegram:", e)
