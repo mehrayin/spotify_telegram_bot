@@ -1,9 +1,9 @@
 flask
 requests
-pip install "python-telegram-bot<20"
-pip install python-telegram-bot aiohttp nest-asyncio
+python-telegram-bot<20
+aiohttp
+nest-asyncio
 gunicorn
-
 
 
 
