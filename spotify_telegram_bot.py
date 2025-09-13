@@ -9,6 +9,20 @@ from telegram.helpers import escape_markdown
 
 app = Flask(__name__)
 
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Bot is running on Railway"
+
+# اینو بعداً برای تلگرام استفاده می‌کنیم
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = request.get_json()
+    print(update)  # میاد توی لاگ Railway
+    return "ok"
+
+
+# app = Flask(__name__)
+
 TELEGRAM_TOKEN = "توکن_ربات_تو"
 bot = telegram.Bot(token=TELEGRAM_TOKEN)
 
@@ -82,3 +96,4 @@ def telegram_webhook():
 # ==== اجرای لوکال برای تست ====
 if __name__ == '__main__':
     app.run(port=5000)
+
