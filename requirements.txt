@@ -4,7 +4,9 @@ python-telegram-bot>=20
 aiohttp
 nest-asyncio
 gunicorn
-uvicorn
+flask[async]
+
+
 
 
 
