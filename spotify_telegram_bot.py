@@ -1,5 +1,5 @@
 # نصب کتابخانه‌ها:
-# pip install requests
+# pip install requests python-telegram-bot
 
 import os
 import time
@@ -7,16 +7,22 @@ import requests
 import datetime
 import shelve
 from typing import List, Dict
+from telegram import Bot
 
+# ====== تنظیمات ======
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# تنظیمات نرخ و کش
-REQUEST_DELAY = 0.3  # فاصله بین درخواست‌ها -> ~3 req/sec (ایمن‌تر)
+REQUEST_DELAY = 0.3  # فاصله بین درخواست‌ها (ثانیه)
 CACHE_FILE = "spotify_cache.db"
 CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
 
+bot = Bot(token=TELEGRAM_TOKEN)
+
+# ====== فانکشن‌های اسپاتیفای ======
 def refresh_access_token(refresh_token: str) -> str:
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
@@ -75,7 +81,7 @@ def get_albums_for_artist(token: str, artist_id: str) -> List[Dict]:
         time.sleep(REQUEST_DELAY)
     return albums
 
-def filter_recent(albums: List[Dict], months=6) -> List[Dict]:
+def filter_recent(albums: List[Dict], months=1) -> List[Dict]:
     cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
     recent = []
     for a in albums:
@@ -94,7 +100,7 @@ def filter_recent(albums: List[Dict], months=6) -> List[Dict]:
             recent.append(a)
     return recent
 
-def cached_get_albums(token: str, artist_id: str, months=6) -> List[Dict]:
+def cached_get_albums(token: str, artist_id: str, months=1) -> List[Dict]:
     key = f"artist_{artist_id}"
     now = time.time()
     with shelve.open(CACHE_FILE) as db:
@@ -120,7 +126,8 @@ def cached_get_albums(token: str, artist_id: str, months=6) -> List[Dict]:
         db[key] = {"ts": now, "recent_albums": minimal}
         return minimal
 
-def get_all_recent_releases_for_followed(months=6) -> List[Dict]:
+# ====== فانکشن اصلی ======
+def send_recent_releases_to_telegram(months=1):
     token = refresh_access_token(REFRESH_TOKEN)
     artists = get_all_followed_artists(token)
     print(f"Found {len(artists)} followed artists")
@@ -144,10 +151,19 @@ def get_all_recent_releases_for_followed(months=6) -> List[Dict]:
             print(f"HTTP error for {artist_name}: {e}")
         except Exception as e:
             print(f"Other error for {artist_name}: {e}")
-    return results
 
-# تست سریع
+    # ----- اول تعداد کل ریلیزها رو بفرست -----
+    count = len(results)
+    bot.send_message(TELEGRAM_CHAT_ID, f"📊 تعداد کل ریلیزهای {months} ماه گذشته: {count}")
+
+    # ----- بعد تک‌تک ریلیزها رو بفرست -----
+    for r in results:
+        text = f"🎵 {r['artist']} - {r['album']}\n📅 {r['date']}\n🔗 {r['url']}"
+        if r['image']:
+            bot.send_photo(TELEGRAM_CHAT_ID, r['image'], caption=text)
+        else:
+            bot.send_message(TELEGRAM_CHAT_ID, text)
+
+# ====== تست سریع ======
 if __name__ == "__main__":
-    releases = get_all_recent_releases_for_followed(months=1)
-    for r in releases[:10]:
-        print(r)
+    send_recent_releases_to_telegram(months=1)
