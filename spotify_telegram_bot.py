@@ -15,7 +15,7 @@ REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-REQUEST_DELAY = 0.9
+REQUEST_DELAY = 0.22
 CACHE_FILE = "spotify_cache.json"
 SENT_ALBUMS_FILE = "sent_albums.json"
 CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
@@ -128,6 +128,15 @@ def cached_get_albums(token, artist_id, months=1):
     return minimal
 
 # ===== Telegram helper =====
+def send_messages_in_chunks(chat_id, messages, chunk_size=20):
+    """ارسال پیام‌ها به صورت چندتکه برای جلوگیری از محدودیت تلگرام"""
+    for i in range(0, len(messages), chunk_size):
+        chunk = messages[i:i+chunk_size]
+        full_message = "\n".join(chunk)
+        safe_text = escape_markdown(full_message, version=2)
+        bot.send_message(chat_id, safe_text, parse_mode="MarkdownV2")
+        time.sleep(0.2)
+
 def send_recent_releases(chat_id, months=1):
     token = refresh_access_token(REFRESH_TOKEN)
     artists = get_all_followed_artists(token)
@@ -146,9 +155,7 @@ def send_recent_releases(chat_id, months=1):
     save_json(SENT_ALBUMS_FILE, sent_albums)
 
     if messages:
-        full_message = "\n".join(messages)
-        safe_text = escape_markdown(full_message, version=2)
-        bot.send_message(chat_id, safe_text, parse_mode="MarkdownV2")
+        send_messages_in_chunks(chat_id, messages, chunk_size=20)
     else:
         bot.send_message(chat_id, "هیچ ریلیز جدیدی در یک ماه گذشته وجود ندارد.")
 
@@ -177,5 +184,5 @@ def handle_update(update_json):
 
 # ===== Run Flask =====
 if __name__ == "__main__":
-    app.run(port=8080)
-
+    # برای Railway باید host=0.0.0.0 باشه
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
