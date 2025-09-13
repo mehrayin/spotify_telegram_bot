@@ -1,46 +1,37 @@
-# نصب کتابخانه‌ها:
-# pip install requests python-telegram-bot flask
-
 import os
 import time
-import requests
 import datetime
 import shelve
-import re
-from threading import Thread
-from typing import List, Dict
+import threading
+import requests
+from telegram import Bot, Update
+from telegram.utils.helpers import escape_markdown
 from flask import Flask, request
-from telegram import Bot
 
-# ====== تنظیمات ======
+# ====== تنظیمات =====
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-REQUEST_DELAY = 0.3
+REQUEST_DELAY = 0.22
 CACHE_FILE = "spotify_cache.db"
-CACHE_TTL_SECONDS = 60 * 60 * 6
 SENT_ALBUMS_FILE = "sent_albums.db"
+CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
 
 bot = Bot(token=TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# ====== فانکشن‌های کمکی ======
-def escape_markdown(text: str) -> str:
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
-
-# ====== فانکشن‌های اسپاتیفای ======
-def refresh_access_token(refresh_token: str) -> str:
+# ===== Spotify helper functions =====
+def refresh_access_token(refresh_token):
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
     resp = requests.post(url, data=data, auth=(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET))
     resp.raise_for_status()
     return resp.json().get("access_token")
 
-def get_all_followed_artists(token: str) -> List[Dict]:
+def get_all_followed_artists(token):
     artists = []
     url = "https://api.spotify.com/v1/me/following"
     headers = {"Authorization": f"Bearer {token}"}
@@ -58,14 +49,13 @@ def get_all_followed_artists(token: str) -> List[Dict]:
         data = r.json()
         chunk = data.get("artists", {}).get("items", [])
         artists.extend(chunk)
-        cursors = data.get("artists", {}).get("cursors", {})
-        after = cursors.get("after")
+        after = data.get("artists", {}).get("cursors", {}).get("after")
         if not after:
             break
         time.sleep(REQUEST_DELAY)
     return artists
 
-def get_albums_for_artist(token: str, artist_id: str) -> List[Dict]:
+def get_albums_for_artist(token, artist_id):
     url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"include_groups": "album,single", "limit": 50}
@@ -79,14 +69,15 @@ def get_albums_for_artist(token: str, artist_id: str) -> List[Dict]:
         r.raise_for_status()
         data = r.json()
         albums.extend(data.get("items", []))
-        if not data.get("next"):
+        next_url = data.get("next")
+        if not next_url:
             break
-        url = data.get("next")
+        url = next_url
         params = None
         time.sleep(REQUEST_DELAY)
     return albums
 
-def filter_recent(albums: List[Dict], months=1) -> List[Dict]:
+def filter_recent(albums, months=1):
     cutoff = datetime.datetime.now() - datetime.timedelta(days=months*30)
     recent = []
     for a in albums:
@@ -101,11 +92,11 @@ def filter_recent(albums: List[Dict], months=1) -> List[Dict]:
         except Exception:
             continue
         if date_obj > cutoff:
-            a["parsed_date"] = date_obj
+            a['parsed_date'] = date_obj
             recent.append(a)
     return recent
 
-def cached_get_albums(token: str, artist_id: str, months=1) -> List[Dict]:
+def cached_get_albums(token, artist_id, months=1):
     key = f"artist_{artist_id}"
     now = time.time()
     with shelve.open(CACHE_FILE) as db:
@@ -119,60 +110,63 @@ def cached_get_albums(token: str, artist_id: str, months=1) -> List[Dict]:
             minimal.append({
                 "id": a.get("id"),
                 "name": a.get("name"),
-                "external_url": a.get("external_urls", {}).get("spotify"),
-                "image": a.get("images", [{}])[0].get("url") if a.get("images") else None,
+                "external_urls": a.get("external_urls"),
+                "images": a.get("images", []),
                 "release_date": a.get("release_date"),
                 "parsed_date": a.get("parsed_date").isoformat() if isinstance(a.get("parsed_date"), datetime.datetime) else a.get("release_date")
             })
         db[key] = {"ts": now, "recent_albums": minimal}
         return minimal
 
-# ====== ارسال ریلیزهای جدید بدون تکرار ======
-def send_recent_releases_to_telegram(chat_id, months=1):
+# ===== Telegram helper =====
+def send_album_safe(chat_id, album_id, text, photo_url=None):
+    with shelve.open(SENT_ALBUMS_FILE, writeback=True) as sent_db:
+        if album_id in sent_db:
+            return
+        sent_db[album_id] = True
+        sent_db.sync()
+
+    safe_text = escape_markdown(text, version=2)
     try:
-        bot.send_message(chat_id, "⏳ در حال بررسی ریلیزهای جدید...")
-        token = refresh_access_token(REFRESH_TOKEN)
-        artists = get_all_followed_artists(token)
-
-        results = []
-        with shelve.open(SENT_ALBUMS_FILE) as sent_db:
-            for artist in artists:
-                artist_id = artist["id"]
-                artist_name = artist.get("name")
-                time.sleep(REQUEST_DELAY)
-                try:
-                    recent_albums = cached_get_albums(token, artist_id, months=months)
-                    for album in recent_albums:
-                        album_id = album.get("id")
-                        if not album_id or album_id in sent_db:
-                            continue
-                        sent_db[album_id] = True  # علامت گذاری
-
-                        text = escape_markdown(f"🎵 {artist_name} - {album['name']}\n📅 {album['release_date']}\n🔗 {album.get('external_url')}")
-                        try:
-                            if album.get("image"):
-                                bot.send_photo(chat_id, album["image"], caption=text)
-                            else:
-                                bot.send_message(chat_id, text)
-                        except Exception as e:
-                            print("Failed to send album:", e)
-                except Exception as e:
-                    print(f"Failed for {artist_name}: {e}")
-
+        if photo_url:
+            bot.send_photo(chat_id, photo_url, caption=safe_text, parse_mode="MarkdownV2")
+        else:
+            bot.send_message(chat_id, safe_text, parse_mode="MarkdownV2")
     except Exception as e:
-        print("Error in send_recent_releases_to_telegram:", e)
+        print("Failed to send album:", e)
 
-# ====== وب‌هوک ======
+def send_recent_releases(chat_id, months=1):
+    token = refresh_access_token(REFRESH_TOKEN)
+    artists = get_all_followed_artists(token)
+    for artist in artists:
+        albums = cached_get_albums(token, artist['id'], months=months)
+        for album in albums:
+            text = f"*{artist['name']}*\n{album['name']}\n{album['release_date']}"
+            photo_url = album.get("images", [{}])[0].get("url")
+            send_album_safe(chat_id, album['id'], text, photo_url)
+            time.sleep(REQUEST_DELAY)
+
+# ===== Flask webhook =====
 @app.route("/webhook", methods=["POST"])
 def telegram_webhook():
-    update = request.get_json()
-    if "callback_query" in update:
-        data = update["callback_query"]["data"]
-        chat_id = update["callback_query"]["message"]["chat"]["id"]
-        bot.answer_callback_query(update["callback_query"]["id"], text="⏳ در حال جمع‌آوری ریلیزها...")
-        Thread(target=send_recent_releases_to_telegram, args=(chat_id, int(data))).start()
+    data = request.get_json()
+    threading.Thread(target=handle_update, args=(data,)).start()
     return "ok"
 
-# ====== اجرای اپ ======
+def handle_update(update_json):
+    # بررسی نوع update
+    if "message" in update_json:
+        text = update_json["message"]["text"]
+        chat_id = update_json["message"]["chat"]["id"]
+        if text == "/start":
+            bot.send_message(chat_id, "🤖 ربات آماده به کار است.\nیکی از بازه‌های زمانی را انتخاب کنید:")
+    elif "callback_query" in update_json:
+        chat_id = update_json["callback_query"]["message"]["chat"]["id"]
+        data = update_json["callback_query"]["data"]
+        if data in ["1","3","6","12"]:
+            months = int(data)
+            send_recent_releases(chat_id, months=months)
+
+# ===== Run Flask =====
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(port=8080)
