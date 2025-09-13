@@ -125,7 +125,7 @@ bot_app.add_handler(CallbackQueryHandler(handle_button_click))
 
 # ====== Flask Webhook ======
 @app.route("/webhook", methods=["POST"])
-async def telegram_webhook():
+def telegram_webhook():
     if WEBHOOK_SECRET:
         header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
         if header_secret != WEBHOOK_SECRET:
@@ -145,3 +145,4 @@ if __name__ == "__main__":
     config = Config()
     config.bind = [f"0.0.0.0:{PORT}"]
     asyncio.run(serve(app, config))
+
