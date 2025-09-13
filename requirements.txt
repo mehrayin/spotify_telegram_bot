@@ -1,9 +1,10 @@
 flask
 requests
-python-telegram-bot>=20
+python-telegram-bot>=13
 aiohttp
 nest-asyncio
 gunicorn
+
 
 
 
