@@ -1,10 +1,10 @@
 import os
-import asyncio
+import time
 import datetime
 import json
-from aiohttp import ClientSession
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.helpers import escape_markdown
+import aiohttp
+import asyncio
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import nest_asyncio
 nest_asyncio.apply()
@@ -14,14 +14,12 @@ SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 CACHE_FILE = "spotify_cache.json"
 SENT_ALBUMS_FILE = "sent_albums.json"
 CACHE_TTL_SECONDS = 60 * 60 * 6  # 6 ساعت
-CHUNK_SIZE = 20  # تعداد پیام در هر بخش برای Telegram
 
-# ====== Utility =====
+# ===== Utility =====
 def load_json(file_path):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -36,7 +34,8 @@ def save_json(file_path, data):
 async def refresh_access_token(session):
     url = "https://accounts.spotify.com/api/token"
     data = {"grant_type": "refresh_token", "refresh_token": REFRESH_TOKEN}
-    async with session.post(url, data=data, auth=aiohttp.BasicAuth(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)) as resp:
+    auth = aiohttp.BasicAuth(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)
+    async with session.post(url, data=data, auth=auth) as resp:
         resp.raise_for_status()
         res = await resp.json()
         return res.get("access_token")
@@ -102,8 +101,12 @@ def filter_recent(albums, months=1):
         except Exception:
             continue
         if date_obj > cutoff:
-            a['parsed_date'] = date_obj
-            recent.append(a)
+            recent.append({
+                "id": a.get("id"),
+                "name": a.get("name"),
+                "artist": a.get("artists", [{}])[0].get("name"),
+                "release_date": a.get("release_date")
+            })
     return recent
 
 async def cached_get_albums(session, token, artist_id, months=1):
@@ -114,32 +117,16 @@ async def cached_get_albums(session, token, artist_id, months=1):
         return cache[key].get("recent_albums", [])
     albums = await get_albums_for_artist(session, token, artist_id)
     recent = filter_recent(albums, months=months)
-    minimal = []
-    for a in recent:
-        minimal.append({
-            "id": a.get("id"),
-            "name": a.get("name"),
-            "artist": a.get("artists", [{}])[0].get("name"),
-            "release_date": a.get("release_date")
-        })
-    cache[key] = {"ts": now, "recent_albums": minimal}
+    cache[key] = {"ts": now, "recent_albums": recent}
     save_json(CACHE_FILE, cache)
-    return minimal
+    return recent
 
 # ===== Telegram Async =====
-async def send_messages_in_chunks(bot, chat_id, messages, chunk_size=CHUNK_SIZE):
-    for i in range(0, len(messages), chunk_size):
-        chunk = messages[i:i+chunk_size]
-        full_message = "\n".join(chunk)
-        safe_text = escape_markdown(full_message, version=2)
-        await bot.send_message(chat_id=chat_id, text=safe_text, parse_mode="MarkdownV2")
-        await asyncio.sleep(0.2)
-
-async def send_recent_releases(bot, chat_id, months=1):
+async def send_recent_releases_file(bot, chat_id, months=1):
     sent_albums = load_json(SENT_ALBUMS_FILE)
-    messages = []
+    all_lines = []
 
-    async with ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
         token = await refresh_access_token(session)
         artists = await get_all_followed_artists(session, token)
         for artist in artists:
@@ -148,15 +135,21 @@ async def send_recent_releases(bot, chat_id, months=1):
                 album_id = album['id']
                 if album_id in sent_albums:
                     continue
-                messages.append(f"{album['artist']} - {album['name']} ({album['release_date']})")
+                all_lines.append(f"{album['artist']} - {album['name']} ({album['release_date']})")
                 sent_albums[album_id] = True
 
     save_json(SENT_ALBUMS_FILE, sent_albums)
 
-    if messages:
-        await send_messages_in_chunks(bot, chat_id, messages)
-    else:
-        await bot.send_message(chat_id, "هیچ ریلیز جدیدی در یک ماه گذشته وجود ندارد.")
+    if not all_lines:
+        await bot.send_message(chat_id=chat_id, text="هیچ ریلیز جدیدی در یک ماه گذشته وجود ندارد.")
+        return
+
+    # ساخت فایل TXT و ارسال
+    file_name = "recent_releases.txt"
+    with open(file_name, "w", encoding="utf-8") as f:
+        f.write("\n".join(all_lines))
+    await bot.send_document(chat_id=chat_id, document=InputFile(file_name))
+    os.remove(file_name)
 
 # ===== Handlers =====
 async def start(update, context):
@@ -164,7 +157,7 @@ async def start(update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="🤖 ربات آماده به کار است.\nبرای مشاهده ریلیزهای یک ماه گذشته روی دکمه زیر بزنید:",
+        text="🤖 ربات آماده است.\nبرای دریافت ریلیزهای یک ماه گذشته روی دکمه بزنید:",
         reply_markup=reply_markup
     )
 
@@ -172,14 +165,15 @@ async def button(update, context):
     query = update.callback_query
     await query.answer()
     if query.data == "1":
-        asyncio.create_task(send_recent_releases(context.bot, query.message.chat.id, months=1))
+        asyncio.create_task(send_recent_releases_file(context.bot, query.message.chat.id, months=1))
 
-# ====== Run Bot =====
+# ===== Run Bot =====
+from telegram.ext import Application
+
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
 
 if __name__ == "__main__":
-    # Railway: Port environment variable
     import uvicorn
     uvicorn.run("this_file_name:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), reload=True)
