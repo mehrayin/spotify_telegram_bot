@@ -4,7 +4,7 @@ import datetime
 import json
 import threading
 import requests
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.utils.helpers import escape_markdown
 from flask import Flask, request
 
@@ -147,7 +147,8 @@ def send_recent_releases(chat_id, months=1):
 
     if messages:
         full_message = "\n".join(messages)
-        bot.send_message(chat_id, full_message)
+        safe_text = escape_markdown(full_message, version=2)
+        bot.send_message(chat_id, safe_text, parse_mode="MarkdownV2")
     else:
         bot.send_message(chat_id, "هیچ ریلیز جدیدی در یک ماه گذشته وجود ندارد.")
 
@@ -172,7 +173,7 @@ def handle_update(update_json):
         chat_id = update_json["callback_query"]["message"]["chat"]["id"]
         data = update_json["callback_query"]["data"]
         if data == "1":
-            send_recent_releases(chat_id, months=1)
+            threading.Thread(target=send_recent_releases, args=(chat_id,1)).start()
 
 # ===== Run Flask =====
 if __name__ == "__main__":
