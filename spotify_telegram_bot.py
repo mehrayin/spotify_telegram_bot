@@ -169,7 +169,12 @@ async def button(update, context):
 
 # ===== Run Bot =====
 from telegram.ext import Application
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 print("TELEGRAM_TOKEN:", TELEGRAM_TOKEN)
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("متغیر محیطی TELEGRAM_TOKEN تنظیم نشده است!")
+
 
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
@@ -178,6 +183,7 @@ app.add_handler(CallbackQueryHandler(button))
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("this_file_name:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), reload=True)
+
 
 
 
